@@ -1,0 +1,37 @@
+<form method="post" action="/cover-letter/pdf-download" target="_blank">
+    <input type="hidden" name="company" value="{{ company | e }}">
+    <div class="cover-field">
+        <label for="sa-result-subject">Betreff</label>
+        <input type="text" id="sa-result-subject" name="subject"
+               class="cover-subject-input"
+               value="{{ subject | e }}">
+    </div>
+    <div class="cover-field">
+        <label for="sa-result-content">Anschreiben</label>
+        <textarea id="sa-result-content" name="content"
+                  class="cover-textarea">{{ body | e }}</textarea>
+    </div>
+    <div class="cover-footer">
+        <button type="submit" class="btn btn-primary">PDF herunterladen</button>
+        <span class="help-text" style="margin: 0;">Text oben bearbeiten, dann PDF generieren.</span>
+    </div>
+</form>
+
+<div class="refine-section">
+    <label class="refine-label">Text überarbeiten</label>
+    <div class="refine-row">
+        <textarea id="sa-refine-instruction"
+                  name="instruction"
+                  class="refine-input"
+                  placeholder="z.B. &quot;Kürze den Einstieg auf einen Satz&quot; oder &quot;Mach den zweiten Absatz konkreter&quot;"></textarea>
+        <button class="btn btn-secondary"
+                hx-post="/cover-letter/refine"
+                hx-include="#sa-result-subject, #sa-result-content, #sa-refine-instruction, input[name='company']"
+                hx-target="#result-area"
+                hx-swap="innerHTML"
+                hx-indicator="#sa-refine-spinner">
+            Überarbeiten
+        </button>
+        <span id="sa-refine-spinner" class="htmx-indicator">Überarbeite...</span>
+    </div>
+</div>

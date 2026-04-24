@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Anschreiben erstellen{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Anschreiben erstellen</h1>
+    <p class="subtitle">Stellenbeschreibung einfügen — kein Account bei dem Unternehmen nötig.</p>
+</div>
+
+<div class="cover-layout">
+    <form hx-post="/cover-letter/generate"
+          hx-target="#result-area"
+          hx-swap="innerHTML"
+          hx-indicator="#gen-spinner">
+        <div class="standalone-fields">
+            <div class="standalone-row">
+                <div class="cover-field">
+                    <label for="sa-company">Unternehmen</label>
+                    <input type="text" id="sa-company" name="company"
+                           class="cover-subject-input" placeholder="z.B. Celonis">
+                </div>
+                <div class="cover-field">
+                    <label for="sa-title">Stellentitel</label>
+                    <input type="text" id="sa-title" name="title"
+                           class="cover-subject-input" placeholder="z.B. Senior AI Engineer">
+                </div>
+                <div class="cover-field">
+                    <label for="sa-location">Standort</label>
+                    <input type="text" id="sa-location" name="location"
+                           class="cover-subject-input" placeholder="z.B. München / Remote">
+                </div>
+            </div>
+            <div class="cover-field">
+                <label for="sa-description">Stellenbeschreibung <span style="color: var(--red)">*</span></label>
+                <textarea id="sa-description" name="description"
+                          class="cover-textarea" style="min-height: 280px;"
+                          placeholder="Vollständigen Text der Stellenanzeige hier einfügen..."></textarea>
+            </div>
+        </div>
+        <div class="cover-actions">
+            <div class="gen-options">
+                <select name="lang" class="gen-select">
+                    <option value="de" selected>Deutsch</option>
+                    <option value="en">English</option>
+                </select>
+                <select name="form" class="gen-select">
+                    <option value="du" selected>Du</option>
+                    <option value="sie">Sie</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Mit Claude generieren</button>
+            <span id="gen-spinner" class="htmx-indicator">Generiere...</span>
+        </div>
+    </form>
+
+    <div id="result-area" style="margin-top: 1.5rem;"></div>
+</div>
+{% endblock %}

@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} — {{ job.company_display }}{% endblock %}
+
+{% block content %}
+<div class="detail-layout">
+    <div class="detail-header">
+        <a href="/" class="back-link">← Alle Stellen</a>
+        <div class="detail-title-row">
+            <div>
+                <h1>{{ job.title }}</h1>
+                <div class="detail-meta">
+                    <span class="company">{{ job.company_display }}</span>
+                    <span class="sep">·</span>
+                    <span class="location">{{ job.location }}</span>
+                    {% if job.workplace_type %}
+                    <span class="sep">·</span>
+                    <span class="workplace">{{ job.workplace_type }}</span>
+                    {% endif %}
+                    {% if job.posted_at %}
+                    <span class="sep">·</span>
+                    <span class="posted">{{ job.posted_at[:10] }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="detail-actions">
+                {% if job.llm_recommendation %}
+                <span class="rec rec-{{ job.llm_recommendation }} rec-large">
+                    {% if job.llm_recommendation == "apply" %}Apply{% elif job.llm_recommendation == "maybe" %}Maybe{% else %}Skip{% endif %}
+                    {% if job.llm_score %} · {{ job.llm_score }}/10{% endif %}
+                </span>
+                {% endif %}
+                <button class="badge {% if job.applied %}badge-applied{% else %}badge-not-applied{% endif %}"
+                        hx-post="/jobs/{{ job.id }}/toggle-applied"
+                        hx-swap="outerHTML">
+                    {% if job.applied %}Beworben{% else %}Nicht beworben{% endif %}
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="detail-body">
+        <div class="detail-left">
+
+            {% if job.llm_summary %}
+            <section class="section-card llm-summary">
+                <h3>LLM-Einschätzung</h3>
+                <p>{{ job.llm_summary }}</p>
+                <div class="llm-details">
+                    <div class="llm-col">
+                        {% if job.llm_strengths %}
+                        <div class="llm-strengths">
+                            <h4>Stärken</h4>
+                            <ul>{% for s in job.llm_strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="llm-col">
+                        {% if job.llm_concerns %}
+                        <div class="llm-concerns">
+                            <h4>Bedenken</h4>
+                            <ul>{% for c in job.llm_concerns %}<li>{{ c }}</li>{% endfor %}</ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="llm-facts">
+                    {% if job.llm_years_required and job.llm_years_required != "nicht angegeben" %}
+                    <span class="fact"><strong>Erfahrung:</strong> {{ job.llm_years_required }}</span>
+                    {% endif %}
+                    {% if job.llm_salary_assessment and job.llm_salary_assessment != "kein Gehalt angegeben" %}
+                    <span class="fact"><strong>Gehalt:</strong> {{ job.llm_salary_assessment }}</span>
+                    {% endif %}
+                    {% if job.llm_python_required is not none %}
+                    <span class="fact"><strong>Python:</strong> {{ "ja" if job.llm_python_required else "nein" }}</span>
+                    {% endif %}
+                </div>
+            </section>
+            {% endif %}
+
+            {% if job.salary_min or job.salary_max %}
+            <section class="section-card">
+                <h3>Gehalt</h3>
+                {% if job.salary_min and job.salary_max %}
+                <p>{{ "{:,.0f}".format(job.salary_min) }} – {{ "{:,.0f}".format(job.salary_max) }} {{ job.salary_currency or "EUR" }}</p>
+                {% elif job.salary_min %}
+                <p>ab {{ "{:,.0f}".format(job.salary_min) }} {{ job.salary_currency or "EUR" }}</p>
+                {% endif %}
+            </section>
+            {% endif %}
+
+            <section class="section-card">
+                <h3>Stellenbeschreibung</h3>
+                <div class="description">
+                    {{ job.description_text | replace('\n', '<br>') | safe }}
+                </div>
+            </section>
+        </div>
+
+        <div class="detail-right">
+            <section class="section-card">
+                <h3>Links</h3>
+                <a href="{{ job.job_url }}" target="_blank" class="btn btn-primary btn-full">
+                    Stelle öffnen →
+                </a>
+                <a href="/jobs/{{ job.id }}/cover-letter" class="btn btn-secondary btn-full" style="margin-top: 0.5rem;">
+                    Anschreiben erstellen
+                </a>
+                {% if cover %}
+                <a href="/jobs/{{ job.id }}/cover-letter/pdf" class="btn btn-outline btn-full" style="margin-top: 0.5rem;">
+                    PDF herunterladen
+                </a>
+                {% endif %}
+            </section>
+
+            <section class="section-card">
+                <h3>Notizen</h3>
+                <form hx-post="/jobs/{{ job.id }}/notes" hx-target="#notes-confirm" hx-swap="innerHTML">
+                    <textarea name="notes" class="notes-input" placeholder="Eigene Notizen zur Stelle...">{{ job.notes or "" }}</textarea>
+                    <div class="notes-footer">
+                        <button type="submit" class="btn btn-secondary">Speichern</button>
+                        <span id="notes-confirm"></span>
+                    </div>
+                </form>
+            </section>
+
+            <section class="section-card">
+                <h3>Details</h3>
+                <dl class="detail-dl">
+                    <dt>Quelle</dt>
+                    <dd>{{ job.source }}</dd>
+                    {% if job.departments %}
+                    <dt>Abteilung</dt>
+                    <dd>{{ job.departments | join(", ") }}</dd>
+                    {% endif %}
+                    <dt>Zuerst gesehen</dt>
+                    <dd>{{ job.first_seen_at[:10] }}</dd>
+                    <dt>Zuletzt gesehen</dt>
+                    <dd>{{ job.last_seen_at[:10] }}</dd>
+                    {% if job.reasons %}
+                    <dt>Match-Gründe</dt>
+                    <dd>{{ job.reasons | join(", ") }}</dd>
+                    {% endif %}
+                </dl>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}

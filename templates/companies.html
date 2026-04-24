@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Unternehmen — Job Scout{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Unternehmen</h1>
+    <p class="subtitle">{{ companies | length }} überwachte Unternehmen</p>
+</div>
+
+<div class="two-col">
+    <div>
+        <section class="section-card">
+            <h3>Neue Unternehmen hinzufügen</h3>
+            <p class="help-text">
+                Ein Unternehmensname pro Zeile. Das Tool sucht automatisch nach dem passenden
+                ATS (Greenhouse, Lever, Personio, Ashby) und trägt neue Einträge direkt in
+                <code>src/companies.py</code> ein.
+            </p>
+            <form hx-post="/companies/add" hx-target="#add-result" hx-swap="innerHTML">
+                <textarea name="names" class="companies-input"
+                          placeholder="Celonis&#10;Personio&#10;Aleph Alpha"></textarea>
+                <button type="submit" class="btn btn-primary">Suchen & Eintragen</button>
+            </form>
+            <div id="add-result" style="margin-top: 1rem;"></div>
+        </section>
+    </div>
+
+    <div>
+        <section class="section-card">
+            <h3>Aktuelle Liste</h3>
+            <div class="companies-table-wrap">
+                <table class="companies-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>ATS</th>
+                            <th>Token</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in companies | sort(attribute="name") %}
+                        <tr>
+                            <td>{{ c.name }}</td>
+                            <td><span class="ats-badge ats-{{ c.ats }}">{{ c.ats }}</span></td>
+                            <td class="token-cell">{{ c.token }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

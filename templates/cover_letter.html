@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Anschreiben — {{ job.title }}{% endblock %}
+
+{% block content %}
+<div class="detail-header">
+    <a href="/jobs/{{ job.id }}" class="back-link">← Zurück zur Stelle</a>
+    <h1>Anschreiben</h1>
+    <p class="subtitle">{{ job.title }} bei {{ job.company_display }}</p>
+</div>
+
+<div class="cover-layout">
+    <div class="cover-actions">
+        <form hx-post="/jobs/{{ job.id }}/cover-letter/generate"
+              hx-target="#cover-form-area"
+              hx-swap="innerHTML"
+              hx-indicator="#gen-spinner">
+            <div class="gen-options">
+                <select name="lang" class="gen-select">
+                    <option value="de" selected>Deutsch</option>
+                    <option value="en">English</option>
+                </select>
+                <select name="form" class="gen-select">
+                    <option value="du" selected>Du</option>
+                    <option value="sie">Sie</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                Mit Claude generieren
+            </button>
+            <span id="gen-spinner" class="htmx-indicator">Generiere...</span>
+        </form>
+        {% if cover %}
+        <a href="/jobs/{{ job.id }}/cover-letter/pdf" class="btn btn-secondary">
+            PDF herunterladen
+        </a>
+        {% endif %}
+    </div>
+
+    <div id="cover-form-area">
+        {% include "_cover_letter_form.html" %}
+    </div>
+</div>
+{% endblock %}

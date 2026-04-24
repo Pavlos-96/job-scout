@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Job Scout{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">Job Scout</a>
+        <div class="nav-links">
+            <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Stellen</a>
+            <a href="/jobs/add-manual" {% if request.url.path == "/jobs/add-manual" %}class="active"{% endif %}>+ Stelle</a>
+            <a href="/cover-letter" {% if request.url.path == "/cover-letter" %}class="active"{% endif %}>Anschreiben</a>
+            <a href="/companies" {% if request.url.path == "/companies" %}class="active"{% endif %}>Unternehmen</a>
+            <a href="/discover" {% if request.url.path == "/discover" %}class="active"{% endif %}>Entdecken</a>
+        </div>
+    </nav>
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

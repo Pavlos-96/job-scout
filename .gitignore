@@ -1,0 +1,23 @@
+# Secrets & personal data
+.env
+jobs.db
+
+# Generated output
+reports/
+cache/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+.idea/
+.history/
+
+# Auto-generated discovery results (may contain personal search terms)
+discovered.py

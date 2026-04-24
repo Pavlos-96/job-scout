@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Entdecken — Job Scout{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Automatisch Entdecken</h1>
+    <p class="subtitle">
+        Durchsucht Google via Serper API nach neuen Unternehmen mit passenden Stellenangeboten
+        und trägt sie automatisch in <code>src/companies.py</code> ein.
+    </p>
+</div>
+
+<div class="section-card" style="max-width: 640px;">
+    <h3>Serper Discovery starten</h3>
+    <p class="help-text">
+        Benötigt: <code>SERPER_API_KEY</code> in <code>.env</code>
+        (kostenlos unter <a href="https://serper.dev" target="_blank">serper.dev</a>,
+        2.500 Suchen/Monat).
+    </p>
+    <form hx-post="/discover/start" hx-target="#discover-status" hx-swap="outerHTML">
+        <button type="submit" class="btn btn-primary">Discovery starten</button>
+    </form>
+
+    <div style="margin-top: 1rem;">
+        <div id="discover-status">
+            {% if discover.status == "running" %}
+            <span class="run-status running"
+                  hx-get="/discover/status" hx-trigger="every 3s" hx-swap="outerHTML">
+                {{ discover.message }}
+            </span>
+            {% elif discover.status == "done" %}
+            <div class="run-status done">
+                <pre>{{ discover.message }}</pre>
+                <a href="/companies">Unternehmen ansehen</a>
+            </div>
+            {% elif discover.status == "error" %}
+            <span class="run-status error">Fehler: {{ discover.message }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="section-card" style="max-width: 640px; margin-top: 1.5rem;">
+    <h3>Einzelne Unternehmen manuell hinzufügen</h3>
+    <p class="help-text">
+        Für gezielte Suche nach spezifischen Unternehmen →
+        <a href="/companies">Unternehmen-Seite</a>
+    </p>
+</div>
+{% endblock %}

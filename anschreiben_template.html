@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>{{TITEL}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @page {
+            size: A4;
+            margin: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-size: 11pt;
+            line-height: 1.55;
+            color: #2c3e50;
+            background: white;
+            padding: 0;
+            margin: 0;
+        }
+
+        .page {
+            width: 210mm;
+            min-height: 297mm;
+            padding: 22mm 25mm 25mm 25mm;
+            margin: 0 auto;
+            background: white;
+        }
+
+        /* ── Header: Name | Contact ── */
+        .header-line {
+            font-size: 10pt;
+            color: #444;
+            margin-bottom: 2mm;
+        }
+
+        .header-line .name {
+            font-weight: 700;
+            color: #2c3e50;
+        }
+
+        .header-line .sep {
+            color: #999;
+            margin: 0 6px;
+        }
+
+        .header-rule {
+            border: none;
+            border-top: 1px solid #bdc3c7;
+            margin-bottom: 8mm;
+        }
+
+        /* ── Date ── */
+        .date {
+            text-align: right;
+            font-size: 10.5pt;
+            color: #555;
+            margin-bottom: 6mm;
+        }
+
+        /* ── Subject ── */
+        .subject {
+            font-size: 11.5pt;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 6mm;
+        }
+
+        /* ── Salutation ── */
+        .salutation {
+            margin-bottom: 4mm;
+        }
+
+        /* ── Body paragraphs ── */
+        .body p {
+            margin-bottom: 3.5mm;
+            text-align: justify;
+            hyphens: auto;
+            -webkit-hyphens: auto;
+        }
+
+        /* ── Closing ── */
+        .closing {
+            margin-top: 6mm;
+        }
+
+        .closing .gruss {
+            margin-bottom: 1mm;
+        }
+
+        .closing .unterschrift {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+                margin: 0;
+            }
+
+            .page {
+                padding: 22mm 25mm 25mm 25mm;
+                margin: 0;
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+
+        <!-- Header -->
+        <div class="header-line">
+            <span class="name">Pavlos Musenidis</span>
+            <span class="sep">|</span> musenidis96@gmail.com
+            <span class="sep">|</span> +49 172 7727542
+            <span class="sep">|</span> Stuttgart
+            <span class="sep">|</span> linkedin.com/in/musenidis
+        </div>
+        <hr class="header-rule">
+
+        <!-- Date -->
+        <div class="date">{{DATUM}}</div>
+
+        <!-- Subject -->
+        <div class="subject">{{BETREFF}}</div>
+
+        <!-- Salutation -->
+        <div class="salutation">{{ANREDE}}</div>
+
+        <!-- Body -->
+        <div class="body">
+            {{BODY}}
+        </div>
+
+        <!-- Closing -->
+        <div class="closing">
+            <div class="gruss">{{GRUSS}}</div>
+            <div class="unterschrift">Pavlos Musenidis</div>
+        </div>
+
+    </div>
+</body>
+</html>

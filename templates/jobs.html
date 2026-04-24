@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Stellen — Job Scout{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Stellenangebote</h1>
+
+    <div class="stats-bar">
+        <span class="stat"><strong>{{ stats.total }}</strong> gesamt</span>
+        {% if stats.new > 0 %}
+        <span class="stat stat-new"><strong>{{ stats.new }}</strong> neu</span>
+        {% endif %}
+        <span class="stat stat-apply"><strong>{{ stats.to_apply }}</strong> zu bewerben</span>
+        <span class="stat stat-applied"><strong>{{ stats.applied }}</strong> beworben</span>
+    </div>
+
+    <div class="toolbar">
+        <div class="filters">
+            <a href="/" class="filter-btn {% if not filter_rec and not filter_applied and not filter_seen %}active{% endif %}">Alle</a>
+            <a href="/?rec=apply" class="filter-btn {% if filter_rec == 'apply' %}active{% endif %}">Apply</a>
+            <a href="/?rec=maybe" class="filter-btn {% if filter_rec == 'maybe' %}active{% endif %}">Maybe</a>
+            <a href="/?seen=0" class="filter-btn {% if filter_seen == '0' %}active{% endif %}">Neu</a>
+            <a href="/?applied=1" class="filter-btn {% if filter_applied == '1' %}active{% endif %}">Beworben</a>
+        </div>
+
+        <div class="run-panel">
+            <form hx-post="/run/start" hx-target="#run-status" hx-swap="outerHTML">
+                <label class="score-toggle">
+                    <input type="checkbox" name="score" value="1"> Mit LLM-Scoring
+                </label>
+                <button type="submit" class="btn btn-primary">Neue Stellen laden</button>
+            </form>
+            <div id="run-status">
+                {% if pipeline.status == "running" %}
+                <span class="run-status running"
+                      hx-get="/run/status" hx-trigger="every 2s" hx-swap="outerHTML">
+                    {{ pipeline.message }}
+                </span>
+                {% elif pipeline.status == "done" %}
+                <span class="run-status done">{{ pipeline.message }}</span>
+                {% elif pipeline.status == "error" %}
+                <span class="run-status error">Fehler: {{ pipeline.message }}</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if jobs %}
+<div class="job-list">
+    {% for job in jobs %}
+    <div class="job-card-wrap" id="job-{{ job.id }}">
+        <a href="/jobs/{{ job.id }}" class="job-card {% if not job.seen %}job-card-new{% endif %}">
+            <div class="job-card-main">
+                <div class="job-card-header">
+                    <span class="job-title">{{ job.title }}</span>
+                    {% if not job.seen %}<span class="badge badge-new">Neu</span>{% endif %}
+                    {% if job.source == "manual" %}<span class="badge badge-manual">Manuell</span>{% endif %}
+                </div>
+                <div class="job-card-meta">
+                    <span class="company">{{ job.company_display }}</span>
+                    <span class="sep">·</span>
+                    <span class="location">{{ job.location }}</span>
+                    {% if job.workplace_type %}
+                    <span class="sep">·</span>
+                    <span class="workplace">{{ job.workplace_type }}</span>
+                    {% endif %}
+                    {% if job.posted_at %}
+                    <span class="sep">·</span>
+                    <span class="time-ago">{{ job.posted_at[:10] }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="job-card-right">
+                {% if job.llm_recommendation %}
+                <span class="rec rec-{{ job.llm_recommendation }}">
+                    {% if job.llm_recommendation == "apply" %}Apply{% elif job.llm_recommendation == "maybe" %}Maybe{% else %}Skip{% endif %}
+                </span>
+                {% endif %}
+                {% if job.llm_score %}
+                <span class="score">{{ job.llm_score }}/10</span>
+                {% endif %}
+            </div>
+        </a>
+        <button class="hide-btn"
+                hx-post="/jobs/{{ job.id }}/hide"
+                hx-target="#job-{{ job.id }}"
+                hx-swap="outerHTML"
+                title="Ausblenden">×</button>
+    </div>
+    {% endfor %}
+</div>
+{% elif not applied_jobs %}
+<div class="empty-state">
+    <p>Keine Stellen gefunden.</p>
+    {% if filter_rec or filter_applied or filter_seen %}
+    <p><a href="/">Filter zurücksetzen</a></p>
+    {% else %}
+    <p>Klick auf "Neue Stellen laden" um den ersten Scan zu starten.</p>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if applied_jobs %}
+<div class="applied-section">
+    <div class="applied-section-header">
+        <span class="applied-section-title">Beworben ({{ applied_jobs | length }})</span>
+    </div>
+    <div class="job-list">
+        {% for job in applied_jobs %}
+        <div class="job-card-wrap job-card-wrap-applied" id="job-{{ job.id }}">
+            <a href="/jobs/{{ job.id }}" class="job-card job-card-applied">
+                <div class="job-card-main">
+                    <div class="job-card-header">
+                        <span class="job-title">{{ job.title }}</span>
+                        <span class="badge badge-applied">Beworben</span>
+                        {% if job.source == "manual" %}<span class="badge badge-manual">Manuell</span>{% endif %}
+                    </div>
+                    <div class="job-card-meta">
+                        <span class="company">{{ job.company_display }}</span>
+                        <span class="sep">·</span>
+                        <span class="location">{{ job.location }}</span>
+                        {% if job.workplace_type %}
+                        <span class="sep">·</span>
+                        <span class="workplace">{{ job.workplace_type }}</span>
+                        {% endif %}
+                        {% if job.posted_at %}
+                        <span class="sep">·</span>
+                        <span class="time-ago">{{ job.posted_at[:10] }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="job-card-right">
+                    {% if job.llm_score %}
+                    <span class="score">{{ job.llm_score }}/10</span>
+                    {% endif %}
+                </div>
+            </a>
+            <button class="hide-btn"
+                    hx-post="/jobs/{{ job.id }}/hide"
+                    hx-target="#job-{{ job.id }}"
+                    hx-swap="outerHTML"
+                    title="Ausblenden">×</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Stelle manuell hinzufügen{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/" class="back-link">← Zurück zu den Stellen</a>
+    <h1>Stelle manuell hinzufügen</h1>
+    <p class="subtitle">Stellenbeschreibung einfügen — wird bewertet und in der Jobliste gespeichert.</p>
+</div>
+
+<div class="cover-layout">
+    <form method="post" action="/jobs/add-manual">
+        <div class="standalone-fields">
+            <div class="standalone-row">
+                <div class="cover-field">
+                    <label for="company">Unternehmen <span style="color: var(--red)">*</span></label>
+                    <input type="text" id="company" name="company"
+                           class="cover-subject-input" placeholder="z.B. Celonis"
+                           required>
+                </div>
+                <div class="cover-field">
+                    <label for="title">Stellentitel <span style="color: var(--red)">*</span></label>
+                    <input type="text" id="title" name="title"
+                           class="cover-subject-input" placeholder="z.B. Senior AI Engineer"
+                           required>
+                </div>
+                <div class="cover-field">
+                    <label for="location">Standort</label>
+                    <input type="text" id="location" name="location"
+                           class="cover-subject-input" placeholder="z.B. München / Remote">
+                </div>
+            </div>
+            <div class="cover-field">
+                <label for="url">Link zur Stelle</label>
+                <input type="url" id="url" name="url"
+                       class="cover-subject-input" placeholder="https://...  (optional, für späteren Zugriff)">
+            </div>
+            <div class="cover-field">
+                <label for="description">Stellenbeschreibung <span style="color: var(--red)">*</span></label>
+                <textarea id="description" name="description"
+                          class="cover-textarea" style="min-height: 300px;"
+                          placeholder="Vollständigen Text der Stellenanzeige hier einfügen..." required></textarea>
+            </div>
+        </div>
+
+        {% if error %}
+        <p class="error" style="margin-bottom: 1rem;">{{ error }}</p>
+        {% endif %}
+
+        <div class="cover-actions">
+            <button type="submit" class="btn btn-primary">Bewerten und speichern</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

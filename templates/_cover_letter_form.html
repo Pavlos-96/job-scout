@@ -1,0 +1,44 @@
+{% if cover %}
+<form hx-post="/jobs/{{ job.id }}/cover-letter/save"
+      hx-target="#cover-save-confirm"
+      hx-swap="innerHTML">
+    <div class="cover-field">
+        <label for="cover-subject">Betreff</label>
+        <input type="text" id="cover-subject" name="subject"
+               class="cover-subject-input"
+               value="{{ cover.subject or '' }}">
+    </div>
+    <div class="cover-field">
+        <label for="cover-content">Anschreiben</label>
+        <textarea id="cover-content" name="content"
+                  class="cover-textarea">{{ cover.content or '' }}</textarea>
+    </div>
+    <div class="cover-footer">
+        <button type="submit" class="btn btn-primary">Speichern</button>
+        <span id="cover-save-confirm"></span>
+    </div>
+</form>
+
+<div class="refine-section">
+    <label class="refine-label">Text überarbeiten</label>
+    <div class="refine-row">
+        <textarea id="refine-instruction-{{ job.id }}"
+                  name="instruction"
+                  class="refine-input"
+                  placeholder="z.B. &quot;Kürze den Einstieg auf einen Satz&quot; oder &quot;Mach den zweiten Absatz konkreter&quot;"></textarea>
+        <button class="btn btn-secondary"
+                hx-post="/jobs/{{ job.id }}/cover-letter/refine"
+                hx-include="#cover-subject, #cover-content, #refine-instruction-{{ job.id }}"
+                hx-target="#cover-form-area"
+                hx-swap="innerHTML"
+                hx-indicator="#refine-spinner-{{ job.id }}">
+            Überarbeiten
+        </button>
+        <span id="refine-spinner-{{ job.id }}" class="htmx-indicator">Überarbeite...</span>
+    </div>
+</div>
+{% else %}
+<p class="help-text">
+    Noch kein Anschreiben vorhanden. Klick auf "Mit Claude generieren" um eines zu erstellen.
+</p>
+{% endif %}
