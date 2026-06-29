@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     llm_salary_assessment TEXT,
     llm_strengths    TEXT,
     llm_concerns     TEXT,
+    -- search profile: 'ai' | 'ml'
+    search_tag       TEXT    DEFAULT 'ai',
     -- user state
     applied          INTEGER DEFAULT 0,
     seen             INTEGER DEFAULT 0,
@@ -96,6 +98,9 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     """Apply incremental schema migrations (idempotent)."""
     migrations = [
         "ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0",
+        "ALTER TABLE jobs ADD COLUMN search_tag TEXT DEFAULT 'ai'",
+        "ALTER TABLE jobs ADD COLUMN llm_salary_quote TEXT",
+        "ALTER TABLE jobs ADD COLUMN llm_coding_assistants INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -145,6 +150,7 @@ async def upsert_jobs(
 
             base = {
                 "job_url": url,
+                "search_tag": getattr(matched, "search_tag", "ai"),
                 "source": j.source,
                 "company": j.company,
                 "company_display": j.company_display,
@@ -179,6 +185,13 @@ async def upsert_jobs(
                     "llm_years_required": scored.years_required,
                     "llm_python_required": 1 if scored.python_required else 0,
                     "llm_salary_assessment": scored.salary_assessment,
+                    "llm_salary_quote": getattr(
+                        scored, "salary_quote", "nicht angegeben"
+                    ),
+                    "llm_coding_assistants": (
+                        1 if getattr(scored, "coding_assistants_mentioned", False)
+                        else 0
+                    ),
                     "llm_strengths": json.dumps(scored.strengths),
                     "llm_concerns": json.dumps(scored.concerns),
                 })
@@ -230,6 +243,7 @@ async def get_jobs(
     seen: bool | None = None,
     hidden: bool | None = False,
     filter_current_year: bool = True,
+    tag: str | None = 'ai',
     limit: int = 500,
     path: Path = DB_PATH,
 ) -> list[dict]:
@@ -258,6 +272,9 @@ async def get_jobs(
     if hidden is not None:
         conditions.append("hidden = ?")
         params.append(1 if hidden else 0)
+    if tag is not None:
+        conditions.append("search_tag = ?")
+        params.append(tag)
     if filter_current_year:
         # Keep manual jobs and undated jobs; drop jobs older than 365 days.
         # date(posted_at) extracts YYYY-MM-DD from ISO8601; works with timezone

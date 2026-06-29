@@ -191,11 +191,42 @@ async def _probe_ashby(client: httpx.AsyncClient, token: str) -> int | None:
     return None
 
 
+async def _probe_recruitee(client: httpx.AsyncClient, token: str) -> int | None:
+    url = f"https://{token}.recruitee.com/api/offers/"
+    r = await _get_with_retry(client, url)
+    if r is None:
+        return None
+    if r.status_code == 200:
+        try:
+            return len(r.json().get("offers", []))
+        except (ValueError, AttributeError):
+            return None
+    _log_probe_miss("recruitee", token, r.status_code)
+    return None
+
+
+async def _probe_smartrecruiters(client: httpx.AsyncClient, token: str) -> int | None:
+    url = (f"https://api.smartrecruiters.com/v1/companies/"
+           f"{token}/postings?limit=1")
+    r = await _get_with_retry(client, url)
+    if r is None:
+        return None
+    if r.status_code == 200:
+        try:
+            return r.json().get("totalFound", 0)
+        except (ValueError, AttributeError):
+            return None
+    _log_probe_miss("smartrecruiters", token, r.status_code)
+    return None
+
+
 PROBERS: dict = {
     "greenhouse": _probe_greenhouse,
     "lever": _probe_lever,
     "personio": _probe_personio,
     "ashby": _probe_ashby,
+    "recruitee": _probe_recruitee,
+    "smartrecruiters": _probe_smartrecruiters,
 }
 
 

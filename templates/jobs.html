@@ -14,19 +14,30 @@
         <span class="stat stat-applied"><strong>{{ stats.applied }}</strong> beworben</span>
     </div>
 
+    <div class="tab-bar">
+        <a href="/?tab=ai" class="tab-btn {% if active_tab == 'ai' %}active{% endif %}">AI Engineer</a>
+        <a href="/?tab=ml" class="tab-btn {% if active_tab == 'ml' %}active{% endif %}">ML Engineer</a>
+        {% if has_filter_stats %}
+        <a href="/filter-stats" class="tab-btn tab-btn-diag">Filter-Diagnose</a>
+        {% endif %}
+    </div>
+
     <div class="toolbar">
         <div class="filters">
-            <a href="/" class="filter-btn {% if not filter_rec and not filter_applied and not filter_seen %}active{% endif %}">Alle</a>
-            <a href="/?rec=apply" class="filter-btn {% if filter_rec == 'apply' %}active{% endif %}">Apply</a>
-            <a href="/?rec=maybe" class="filter-btn {% if filter_rec == 'maybe' %}active{% endif %}">Maybe</a>
-            <a href="/?seen=0" class="filter-btn {% if filter_seen == '0' %}active{% endif %}">Neu</a>
-            <a href="/?applied=1" class="filter-btn {% if filter_applied == '1' %}active{% endif %}">Beworben</a>
+            <a href="/?tab={{ active_tab }}" class="filter-btn {% if not filter_rec and not filter_applied and not filter_seen %}active{% endif %}">Alle</a>
+            <a href="/?tab={{ active_tab }}&rec=apply" class="filter-btn {% if filter_rec == 'apply' %}active{% endif %}">Apply</a>
+            <a href="/?tab={{ active_tab }}&rec=maybe" class="filter-btn {% if filter_rec == 'maybe' %}active{% endif %}">Maybe</a>
+            <a href="/?tab={{ active_tab }}&seen=0" class="filter-btn {% if filter_seen == '0' %}active{% endif %}">Neu</a>
+            <a href="/?tab={{ active_tab }}&applied=1" class="filter-btn {% if filter_applied == '1' %}active{% endif %}">Beworben</a>
         </div>
 
         <div class="run-panel">
             <form hx-post="/run/start" hx-target="#run-status" hx-swap="outerHTML">
                 <label class="score-toggle">
-                    <input type="checkbox" name="score" value="1"> Mit LLM-Scoring
+                    <input type="checkbox" name="score" value="1"> LLM-Scoring
+                </label>
+                <label class="score-toggle" title="Sucht via ~35 gezielte Serper-Dorks nach Firmen die JETZT passende Jobs haben (braucht SERPER_API_KEY, ~35 Credits)">
+                    <input type="checkbox" name="serper_jobs" value="1"> Serper-Suche
                 </label>
                 <button type="submit" class="btn btn-primary">Neue Stellen laden</button>
             </form>

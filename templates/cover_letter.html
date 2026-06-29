@@ -15,14 +15,29 @@
               hx-swap="innerHTML"
               hx-indicator="#gen-spinner">
             <div class="gen-options">
-                <select name="lang" class="gen-select">
+                <select name="lang" class="gen-select" title="Sprache">
                     <option value="de" selected>Deutsch</option>
                     <option value="en">English</option>
                 </select>
-                <select name="form" class="gen-select">
-                    <option value="du" selected>Du</option>
-                    <option value="sie">Sie</option>
+                <select name="role_focus" class="gen-select" title="Rollen-Fokus">
+                    <option value="ai_engineer" selected>AI Engineer</option>
+                    <option value="ai_consultant">AI Consultant</option>
+                    <option value="ml_engineer">ML Engineer</option>
                 </select>
+                <select name="remote_pref" class="gen-select" title="Remote-Setup">
+                    <option value="" selected>Remote-Setup (nicht erwähnen)</option>
+                    <option value="remote_with_visits">Vollremote + Besuche 1x/Monat</option>
+                    <option value="hybrid_weekly">Hybrid, 1 Tag/Woche vor Ort</option>
+                    <option value="remote_only">Nur vollremote</option>
+                </select>
+            </div>
+            <div class="gen-options">
+                <input type="text" name="salary" class="gen-input"
+                       placeholder="Gehaltsvorstellung (optional, z.B. 85-90k EUR)"
+                       value="">
+                <input type="text" name="location_pref" class="gen-input"
+                       placeholder="Standort-Präferenz (optional, z.B. Heidelberg)"
+                       value="">
             </div>
             <button type="submit" class="btn btn-primary">
                 Mit Claude generieren

@@ -17,6 +17,17 @@
     </div>
 </form>
 
+<div class="refine-context" hidden>
+    <input type="hidden" id="sa-refine-title" name="title" value="{{ title or '' }}">
+    <input type="hidden" id="sa-refine-location" name="location" value="{{ location or '' }}">
+    <input type="hidden" id="sa-refine-description" name="description" value="{{ description or '' }}">
+    <input type="hidden" id="sa-refine-lang" name="lang" value="{{ lang or '' }}">
+    <input type="hidden" id="sa-refine-role" name="role_focus" value="{{ role_focus or 'ai_engineer' }}">
+    <input type="hidden" id="sa-refine-remote" name="remote_pref" value="{{ remote_pref or '' }}">
+    <input type="hidden" id="sa-refine-salary" name="salary" value="{{ salary or '' }}">
+    <input type="hidden" id="sa-refine-locpref" name="location_pref" value="{{ location_pref or '' }}">
+</div>
+
 <div class="refine-section">
     <label class="refine-label">Text überarbeiten</label>
     <div class="refine-row">
@@ -26,7 +37,7 @@
                   placeholder="z.B. &quot;Kürze den Einstieg auf einen Satz&quot; oder &quot;Mach den zweiten Absatz konkreter&quot;"></textarea>
         <button class="btn btn-secondary"
                 hx-post="/cover-letter/refine"
-                hx-include="#sa-result-subject, #sa-result-content, #sa-refine-instruction, input[name='company']"
+                hx-include="#sa-result-subject, #sa-result-content, #sa-refine-instruction, input[name='company'], #sa-refine-title, #sa-refine-location, #sa-refine-description, #sa-refine-lang, #sa-refine-role, #sa-refine-remote, #sa-refine-salary, #sa-refine-locpref"
                 hx-target="#result-area"
                 hx-swap="innerHTML"
                 hx-indicator="#sa-refine-spinner">

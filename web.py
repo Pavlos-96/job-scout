@@ -129,20 +129,22 @@ async def jobs_list(
     rec: str = "",
     applied: str = "",
     seen: str = "",
+    tab: str = "ai",
 ):
+    active_tab = tab if tab in ("ai", "ml") else "ai"
     filter_rec = rec if rec in ("apply", "maybe", "skip") else None
     filter_applied = True if applied == "1" else (False if applied == "0" else None)
     filter_seen = True if seen == "1" else (False if seen == "0" else None)
 
     if filter_applied is None:
-        # Default view: open jobs on top, applied section pinned to the bottom.
         open_jobs = await get_jobs(
             recommendation=filter_rec,
             applied=False,
             seen=filter_seen,
             hidden=False,
+            tag=active_tab,
         )
-        applied_jobs = await get_jobs(applied=True, hidden=False)
+        applied_jobs = await get_jobs(applied=True, hidden=False, tag=active_tab)
         jobs = open_jobs
     else:
         jobs = await get_jobs(
@@ -150,6 +152,7 @@ async def jobs_list(
             applied=filter_applied,
             seen=filter_seen,
             hidden=False,
+            tag=active_tab,
         )
         applied_jobs = []
 
@@ -164,7 +167,9 @@ async def jobs_list(
         "filter_rec": rec,
         "filter_applied": applied,
         "filter_seen": seen,
+        "active_tab": active_tab,
         "pipeline": _state["pipeline"],
+        "has_filter_stats": bool(_state.get("filter_stats")),
     })
 
 
@@ -219,7 +224,12 @@ async def job_add_manual(
         salary_currency=None,
     )
 
-    matched = MatchedJob(job=job, reasons=["manuell hinzugefügt"], score_hints=[])
+    matched = MatchedJob(
+        job=job,
+        reasons=["manuell hinzugefügt"],
+        location_flags={},
+        score_hints=[],
+    )
 
     scored = None
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -295,7 +305,29 @@ async def job_save_notes(job_id: int, notes: str = Form(default="")):
 # Pipeline (run.py)
 # ---------------------------------------------------------------------------
 
-async def _run_pipeline(score: bool):
+def _build_filter_stats(
+    rejection_log: list[dict],
+    ai_matches: int,
+    ml_matches: int,
+    total_fetched: int,
+) -> dict:
+    """Summarise rejection log into a stats dict for the UI."""
+    from collections import defaultdict
+    by_reason: dict[str, list[dict]] = defaultdict(list)
+    for entry in rejection_log:
+        by_reason[entry["reason"]].append(entry)
+    return {
+        "total_fetched": total_fetched,
+        "ai_matches": ai_matches,
+        "ml_matches": ml_matches,
+        "by_reason": {k: v for k, v in sorted(by_reason.items())},
+    }
+
+
+async def _run_pipeline(
+    score: bool,
+    serper_jobs: bool = False,
+):
     _state["pipeline"] = {"status": "running", "message": "Stellen werden geladen..."}
     run_id = await start_run()
 
@@ -303,22 +335,57 @@ async def _run_pipeline(score: bool):
         from src.fetchers import fetch_all
         from src.filters import FilterConfig, filter_jobs
         from src.companies import COMPANIES
+        from src.scorer import DEFAULT_MODEL
 
-        _state["pipeline"]["message"] = f"Fetche Jobs von {len(COMPANIES)} Unternehmen..."
-        jobs = await fetch_all(COMPANIES, concurrency=8)
-        _state["pipeline"]["message"] = f"{len(jobs)} Jobs gefetcht, filtere..."
+        companies = list(COMPANIES)
+        serper_key = os.environ.get("SERPER_API_KEY", "").strip()
+        extra_jobs: list = []
 
-        cfg = FilterConfig(
+        if serper_jobs and serper_key:
+            _state["pipeline"]["message"] = (
+                "Serper-Suche: ~35 gezielte Dorks auf 6 ATS "
+                "(neue Firmen, nicht in companies.py)…"
+            )
+            from serper_discover import serper_find_jobs
+            extra_jobs = await serper_find_jobs(serper_key)
+            log.info(
+                "Serper-Suche: %d zusätzliche Jobs aus neu entdeckten Firmen",
+                len(extra_jobs),
+            )
+        elif serper_jobs and not serper_key:
+            log.warning("Serper-Suche: SERPER_API_KEY nicht gesetzt, übersprungen")
+
+        _state["pipeline"]["message"] = f"Fetche Jobs von {len(companies)} Unternehmen…"
+        jobs = await fetch_all(companies, concurrency=8)
+        jobs.extend(extra_jobs)
+        _state["pipeline"]["message"] = (
+            f"{len(jobs)} Jobs gefetcht "
+            f"(+{len(extra_jobs)} Serper), filtere…"
+        )
+
+        base_cfg = dict(
             require_senior_title=False,
             require_germany_or_remote=True,
             prefer_munich=True,
-            min_salary=90000,
+            min_salary=85000,
             exclude_junior=True,
             require_posted_in_current_year=True,
             exclude_unknown_post_date=False,
         )
-        matches = filter_jobs(jobs, cfg)
-        _state["pipeline"]["message"] = f"{len(matches)} Matches, score mit LLM..."
+        rejection_log: list[dict] = []
+        ai_cfg = FilterConfig(**base_cfg, search_tag='ai')
+        ml_cfg = FilterConfig(**base_cfg, search_tag='ml')
+
+        ai_matches = filter_jobs(jobs, ai_cfg, rejection_log=rejection_log)
+        ml_matches = filter_jobs(jobs, ml_cfg, rejection_log=rejection_log)
+        all_matches = ai_matches + ml_matches
+
+        _state["filter_stats"] = _build_filter_stats(
+            rejection_log, len(ai_matches), len(ml_matches), len(jobs)
+        )
+        _state["pipeline"]["message"] = (
+            f"{len(ai_matches)} AI + {len(ml_matches)} ML Matches, score mit LLM..."
+        )
 
         scored_pairs = None
         api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -328,25 +395,25 @@ async def _run_pipeline(score: bool):
             from src.cache import ScoreCache
             cache = ScoreCache(ROOT / "cache" / "scores.json")
             scored_pairs = await score_all(
-                matches, api_key=api_key, model="gpt-4o-mini",
+                all_matches, api_key=api_key, model=DEFAULT_MODEL,
                 concurrency=5, cache=cache,
             )
             cache.save()
 
-        pairs_for_db = scored_pairs if scored_pairs else [(m, None) for m in matches]
+        pairs_for_db = scored_pairs if scored_pairs else [(m, None) for m in all_matches]
         new_count = await upsert_jobs(pairs_for_db)
 
         await finish_run(
             run_id,
             jobs_fetched=len(jobs),
-            jobs_matched=len(matches),
+            jobs_matched=len(all_matches),
             jobs_new=new_count,
         )
         _state["pipeline"] = {
             "status": "done",
             "message": (
-                f"{len(jobs)} gefetcht, {len(matches)} Matches, "
-                f"{new_count} neu in DB"
+                f"{len(jobs)} gefetcht · {len(ai_matches)} AI · "
+                f"{len(ml_matches)} ML · {new_count} neu in DB"
             ),
         }
     except Exception as exc:  # noqa: BLE001
@@ -356,14 +423,20 @@ async def _run_pipeline(score: bool):
 
 
 @app.post("/run/start", response_class=HTMLResponse)
-async def run_start(background_tasks: BackgroundTasks, score: str = Form(default="0")):
+async def run_start(
+    background_tasks: BackgroundTasks,
+    score: str = Form(default="0"),
+    serper_jobs: str = Form(default="0"),
+):
     if _state["pipeline"].get("status") == "running":
         return HTMLResponse('<span class="run-status running">Bereits am Laufen...</span>')
-    background_tasks.add_task(_run_pipeline, score == "1")
+    background_tasks.add_task(
+        _run_pipeline, score == "1", serper_jobs == "1",
+    )
     return HTMLResponse(
         '<span class="run-status running" '
         'hx-get="/run/status" hx-trigger="every 2s" hx-swap="outerHTML">'
-        'Gestartet...</span>'
+        'Gestartet…</span>'
     )
 
 
@@ -391,6 +464,17 @@ async def run_status():
     return HTMLResponse('<span class="run-status idle"></span>')
 
 
+@app.get("/filter-stats", response_class=HTMLResponse)
+async def filter_stats_page(request: Request):
+    stats = _state.get("filter_stats")
+    if not stats:
+        return HTMLResponse(
+            "<p style='padding:2rem;color:#888'>Noch kein Pipeline-Run seit dem Start. "
+            "Starte erst einen Run um Filter-Stats zu sehen.</p>"
+        )
+    return templates.TemplateResponse(request, "filter_stats.html", {"stats": stats})
+
+
 # ---------------------------------------------------------------------------
 # Cover letter
 # ---------------------------------------------------------------------------
@@ -412,7 +496,10 @@ async def cover_letter_generate(
     request: Request,
     job_id: int,
     lang: str = Form(default="de"),
-    form: str = Form(default="du"),
+    role_focus: str = Form(default="ai_engineer"),
+    remote_pref: str = Form(default=""),
+    salary: str = Form(default=""),
+    location_pref: str = Form(default=""),
 ):
     job = await get_job(job_id)
     if not job:
@@ -438,9 +525,17 @@ async def cover_letter_generate(
             "description": job["description_text"] or "",
             "url": job["job_url"],
         }
-        log.info("cover_letter_generate: lang=%r form=%r", lang, form)
-        system_prompt = build_system_prompt(form, lang)
-        log.info("prompt_start: %r", system_prompt[:120])
+        log.info(
+            "cover_letter_generate: lang=%r role=%r remote=%r salary=%r loc=%r",
+            lang, role_focus, remote_pref, salary, location_pref,
+        )
+        system_prompt = build_system_prompt(
+            lang=lang,
+            role_focus=role_focus,
+            remote_pref=remote_pref,
+            salary=salary,
+            location_pref=location_pref,
+        )
         result = call_anthropic(system_prompt, job_data, api_key)
 
         if not result:
@@ -452,6 +547,11 @@ async def cover_letter_generate(
         return templates.TemplateResponse(request, "_cover_letter_form.html", {
             "job": job,
             "cover": {"subject": subject, "content": body},
+            "lang": lang,
+            "role_focus": role_focus,
+            "remote_pref": remote_pref,
+            "salary": salary,
+            "location_pref": location_pref,
         })
     except Exception as exc:  # noqa: BLE001
         log.exception("Cover letter generation failed")
@@ -534,67 +634,70 @@ async def cover_letter_pdf(job_id: int):
 # Cover letter refinement (shared helper + two endpoints)
 # ---------------------------------------------------------------------------
 
+def _detect_lang(body: str) -> str:
+    """Best-effort language guess from an existing letter body.
+
+    Used so refine reuses the same prompt language the original letter was
+    generated in, without needing to persist it. The Du/Sie decision is
+    not pinned down here, the model picks it up again from the original
+    letter content.
+    """
+    lowered = body.lower()
+    english_markers = (
+        "hi there", "hello team", "dear hiring", "dear team",
+        "best regards", "kind regards", "i'm available", "i would",
+    )
+    return "en" if any(m in lowered for m in english_markers) else "de"
+
+
 def _call_anthropic_refine(
     subject: str,
     content: str,
     instruction: str,
     api_key: str,
+    job: dict | None = None,
+    *,
+    lang: str = "",
+    role_focus: str = "ai_engineer",
+    remote_pref: str = "",
+    salary: str = "",
+    location_pref: str = "",
 ) -> tuple[str, str] | None:
-    """
-    Refine an existing cover letter via a user instruction.
-    Returns (subject, body) — only the text, no meta-commentary.
+    """Refine an existing cover letter using the SAME system prompt
+    configuration as the original generation.
+
+    Hidden form fields rendered after generation pass the steering values
+    back, so refine reuses the exact same prompt blocks (role focus, remote
+    setup, salary, location). When values are missing (older saved letters),
+    language is heuristically detected from the existing body. Du/Sie is
+    inferred by the model from the existing letter's style.
     """
     try:
-        from anthropic import Anthropic
-    except ImportError:
+        import importlib
+        import write_cover_letter as _cl
+        importlib.reload(_cl)
+    except ImportError as exc:
+        log.error("write_cover_letter import failed: %s", exc)
         return None
 
-    system = (
-        "Du überarbeitest ein Anschreiben nach einer spezifischen Anweisung.\n\n"
-        "ABSOLUT WICHTIG:\n"
-        "- Gib NUR den überarbeiteten Text zurück.\n"
-        "- KEINE Einleitung wie 'Hier ist...' oder 'Ich habe...'.\n"
-        "- KEINE Erklärungen was du geändert hast.\n"
-        "- KEINE Kommentare vor oder nach dem Text.\n"
-        "- KEIN Markdown.\n\n"
-        "Format der Ausgabe (exakt so):\n"
-        "BETREFF: <Betreff>\n\n"
-        "<Body ohne Anrede, ohne Grußformel, ohne Unterschrift>"
+    if not lang:
+        lang = _detect_lang(content)
+
+    system_prompt = _cl.build_system_prompt(
+        lang=lang,
+        role_focus=role_focus or "ai_engineer",
+        remote_pref=remote_pref,
+        salary=salary,
+        location_pref=location_pref,
     )
-    user = (
-        f"Aktuelles Anschreiben:\n"
-        f"BETREFF: {subject}\n\n"
-        f"{content}\n\n"
-        f"Anweisung: {instruction}"
+    return _cl.call_anthropic_refine(
+        system_prompt=system_prompt,
+        subject=subject,
+        body=content,
+        instruction=instruction,
+        api_key=api_key,
+        job=job,
     )
-
-    try:
-        client = Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=1500,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = response.content[0].text.strip()
-    except Exception as exc:  # noqa: BLE001
-        log.error("Anthropic refine failed: %s", exc)
-        return None
-
-    lines = text.split("\n")
-    new_subject = subject
-    body_start = 0
-    for i, line in enumerate(lines):
-        if line.startswith("BETREFF:"):
-            new_subject = line[len("BETREFF:"):].strip()
-            body_start = i + 1
-            break
-
-    while body_start < len(lines) and not lines[body_start].strip():
-        body_start += 1
-
-    body = "\n".join(lines[body_start:]).strip()
-    return new_subject, body
 
 
 @app.post("/jobs/{job_id}/cover-letter/refine", response_class=HTMLResponse)
@@ -604,6 +707,11 @@ async def cover_letter_refine_job(
     subject: str = Form(default=""),
     content: str = Form(default=""),
     instruction: str = Form(default=""),
+    lang: str = Form(default=""),
+    role_focus: str = Form(default="ai_engineer"),
+    remote_pref: str = Form(default=""),
+    salary: str = Form(default=""),
+    location_pref: str = Form(default=""),
 ):
     if not instruction.strip():
         return HTMLResponse('<p class="error">Bitte eine Überarbeitungs-Anweisung eingeben.</p>')
@@ -616,7 +724,18 @@ async def cover_letter_refine_job(
     if not job:
         return HTMLResponse("<p>Stelle nicht gefunden.</p>", status_code=404)
 
-    result = _call_anthropic_refine(subject, content, instruction, api_key)
+    job_ctx = {
+        "title": job["title"],
+        "company": job["company_display"],
+        "location": job["location"],
+        "description": job["description_text"] or "",
+    }
+    result = _call_anthropic_refine(
+        subject, content, instruction, api_key, job=job_ctx,
+        lang=lang,
+        role_focus=role_focus, remote_pref=remote_pref,
+        salary=salary, location_pref=location_pref,
+    )
     if not result:
         return HTMLResponse('<p class="error">Überarbeitung fehlgeschlagen.</p>')
 
@@ -626,6 +745,11 @@ async def cover_letter_refine_job(
     return templates.TemplateResponse(request, "_cover_letter_form.html", {
         "job": job,
         "cover": {"subject": new_subject, "content": new_body},
+        "lang": lang,
+        "role_focus": role_focus,
+        "remote_pref": remote_pref,
+        "salary": salary,
+        "location_pref": location_pref,
     })
 
 
@@ -636,6 +760,14 @@ async def cover_letter_refine_standalone(
     content: str = Form(default=""),
     instruction: str = Form(default=""),
     company: str = Form(default=""),
+    title: str = Form(default=""),
+    location: str = Form(default=""),
+    description: str = Form(default=""),
+    lang: str = Form(default=""),
+    role_focus: str = Form(default="ai_engineer"),
+    remote_pref: str = Form(default=""),
+    salary: str = Form(default=""),
+    location_pref: str = Form(default=""),
 ):
     if not instruction.strip():
         return HTMLResponse('<p class="error">Bitte eine Überarbeitungs-Anweisung eingeben.</p>')
@@ -644,7 +776,21 @@ async def cover_letter_refine_standalone(
     if not api_key:
         return HTMLResponse('<p class="error">ANTHROPIC_API_KEY fehlt in .env</p>')
 
-    result = _call_anthropic_refine(subject, content, instruction, api_key)
+    job_ctx = None
+    if description.strip():
+        job_ctx = {
+            "title": title or "Stelle",
+            "company": company or "Unternehmen",
+            "location": location or "",
+            "description": description,
+        }
+
+    result = _call_anthropic_refine(
+        subject, content, instruction, api_key, job=job_ctx,
+        lang=lang,
+        role_focus=role_focus, remote_pref=remote_pref,
+        salary=salary, location_pref=location_pref,
+    )
     if not result:
         return HTMLResponse('<p class="error">Überarbeitung fehlgeschlagen.</p>')
 
@@ -653,6 +799,14 @@ async def cover_letter_refine_standalone(
         "subject": new_subject,
         "body": new_body,
         "company": company,
+        "title": title,
+        "location": location,
+        "description": description,
+        "lang": lang,
+        "role_focus": role_focus,
+        "remote_pref": remote_pref,
+        "salary": salary,
+        "location_pref": location_pref,
     })
 
 
@@ -673,7 +827,10 @@ async def standalone_cover_letter_generate(
     location: str = Form(default=""),
     description: str = Form(default=""),
     lang: str = Form(default="de"),
-    form: str = Form(default="du"),
+    role_focus: str = Form(default="ai_engineer"),
+    remote_pref: str = Form(default=""),
+    salary: str = Form(default=""),
+    location_pref: str = Form(default=""),
 ):
     if not description.strip():
         return HTMLResponse('<p class="error">Bitte Stellenbeschreibung einfügen.</p>')
@@ -696,7 +853,13 @@ async def standalone_cover_letter_generate(
             "description": description,
             "url": "",
         }
-        system_prompt = build_system_prompt(form, lang)
+        system_prompt = build_system_prompt(
+            lang=lang,
+            role_focus=role_focus,
+            remote_pref=remote_pref,
+            salary=salary,
+            location_pref=location_pref,
+        )
         result = call_anthropic(system_prompt, job_data, api_key)
 
         if not result:
@@ -707,6 +870,14 @@ async def standalone_cover_letter_generate(
             "subject": subject,
             "body": body,
             "company": company,
+            "title": title,
+            "location": location,
+            "description": description,
+            "lang": lang,
+            "role_focus": role_focus,
+            "remote_pref": remote_pref,
+            "salary": salary,
+            "location_pref": location_pref,
         })
     except Exception as exc:  # noqa: BLE001
         log.exception("Standalone cover letter failed")
@@ -829,20 +1000,34 @@ async def companies_add(names: str = Form(default="")):
 # Serper Discovery
 # ---------------------------------------------------------------------------
 
-async def _run_discovery():
-    _state["discover"] = {"status": "running", "message": "Suche läuft..."}
+async def _run_discovery(mode: str = "focused"):
+    _state["discover"] = {
+        "status": "running",
+        "message": f"Live-Discovery ({mode}): suche neue Firmen...",
+    }
+    serper_key = os.environ.get("SERPER_API_KEY", "").strip()
+    if not serper_key:
+        _state["discover"] = {
+            "status": "error",
+            "message": "SERPER_API_KEY nicht gesetzt.",
+        }
+        return
     try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "serper_discover.py"), "--update"],
-            capture_output=True,
-            text=True,
-            cwd=str(ROOT),
-            check=False,
+        from serper_discover import discover_live
+        new_companies = await discover_live(
+            serper_key,
+            save_to_companies=True,
+            mode=mode,
         )
-        output = result.stdout.strip() or result.stderr.strip() or "Fertig."
-        _state["discover"] = {"status": "done", "message": output}
-    except OSError as exc:
+        _state["discover"] = {
+            "status": "done",
+            "message": (
+                f"{len(new_companies)} neue Firmen entdeckt und in "
+                "companies.py gespeichert."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Discovery failed")
         _state["discover"] = {"status": "error", "message": str(exc)}
 
 
@@ -854,14 +1039,18 @@ async def discover_page(request: Request):
 
 
 @app.post("/discover/start", response_class=HTMLResponse)
-async def discover_start(background_tasks: BackgroundTasks):
+async def discover_start(
+    background_tasks: BackgroundTasks,
+    mode: str = Form(default="focused"),
+):
     if _state["discover"].get("status") == "running":
         return HTMLResponse('<span class="run-status running">Bereits am Laufen...</span>')
-    background_tasks.add_task(_run_discovery)
+    safe_mode = mode if mode in ("focused", "full") else "focused"
+    background_tasks.add_task(_run_discovery, safe_mode)
     return HTMLResponse(
         '<span class="run-status running" '
         'hx-get="/discover/status" hx-trigger="every 3s" hx-swap="outerHTML">'
-        'Suche gestartet...</span>'
+        f'Suche gestartet ({safe_mode})...</span>'
     )
 
 

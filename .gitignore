@@ -21,3 +21,6 @@ venv/
 
 # Auto-generated discovery results (may contain personal search terms)
 discovered.py
+
+# Unrelated large artifacts that landed in this folder
+visual-object-finder.zip

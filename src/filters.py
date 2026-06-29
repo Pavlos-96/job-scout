@@ -154,6 +154,47 @@ def title_matches(title: str) -> bool:
     return bool(TITLE_MATCH.search(title))
 
 
+# --- ML Engineer title matching -----------------------------------------------
+# Separate regex for Machine Learning Engineer roles shown in the ML tab.
+# Deliberately does NOT overlap with TITLE_MATCH (AI/ML Engineer is already
+# caught there). The scorer still applies and will skip infra/ops-heavy roles.
+
+TITLE_MATCH_ML = re.compile(
+    rf"""
+    \b
+    (?:
+        # ML Engineer (any seniority prefix)
+        (?:{_TITLE_LEVEL}\s+)?
+        ml\s+engineer
+        |
+        # Machine Learning Engineer (any seniority prefix)
+        (?:{_TITLE_LEVEL}\s+)?
+        machine\s+learning\s+engineer
+    )
+    \b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Hard reject for ML tab: pure ops/platform/infra roles.
+TITLE_EXCLUDE_ML = re.compile(
+    r"\b(mlops|ml[-\s]*ops|ml\s+platform|ml\s+infra(?:structure)?|ml\s+devops)\b",
+    re.IGNORECASE,
+)
+
+
+def title_matches_ml(title: str) -> bool:
+    """Match ML Engineer titles not already captured by the AI filter."""
+    if not title:
+        return False
+    # "AI/ML Engineer" is already in the AI tab — don't double-count it.
+    if title_matches(title):
+        return False
+    if TITLE_EXCLUDE_ML.search(title):
+        return False
+    return bool(TITLE_MATCH_ML.search(title))
+
+
 # --- Seniority detection ------------------------------------------------------
 
 SENIOR_RE = re.compile(r"\b(senior|sr\.?|staff|lead|principal|\(senior\))\b", re.IGNORECASE)
@@ -170,15 +211,40 @@ def is_junior_title(title: str) -> bool:
 
 GERMANY_TOKENS = [
     "germany", "deutschland", "de-", " de,", "(de)",
+    # Top-30 cities
     "berlin", "münchen", "munich", "stuttgart", "hamburg", "köln", "cologne",
     "frankfurt", "düsseldorf", "duesseldorf", "leipzig", "dresden", "nürnberg",
     "nuremberg", "karlsruhe", "mannheim", "bremen", "hannover", "dortmund",
     "essen", "bonn", "heidelberg", "freiburg", "aachen", "ulm", "augsburg",
-    "bavaria", "bayern", "baden-württemberg", "nrw",
+    "wiesbaden", "münster", "muenster", "kiel", "lübeck", "luebeck",
+    "magdeburg", "erfurt", "rostock", "mainz", "darmstadt",
+    # Mid-tier cities frequently in postings
+    "bamberg", "würzburg", "wuerzburg", "regensburg", "passau", "ingolstadt",
+    "fürth", "fuerth", "erlangen", "jena", "kassel", "saarbrücken",
+    "saarbruecken", "potsdam", "halle", "chemnitz", "braunschweig",
+    "wolfsburg", "oldenburg", "osnabrück", "osnabrueck", "bielefeld",
+    "paderborn", "siegen", "bochum", "duisburg", "wuppertal", "leverkusen",
+    "mönchengladbach", "moenchengladbach", "krefeld", "solingen", "trier",
+    "koblenz", "ludwigshafen", "kaiserslautern", "tübingen", "tuebingen",
+    "konstanz", "reutlingen", "pforzheim", "esslingen", "heilbronn",
+    "ravensburg", "rosenheim", "ingolstadt", "landshut",
+    # Federal states
+    "bavaria", "bayern", "baden-württemberg", "baden-wuerttemberg", "nrw",
+    "nordrhein-westfalen", "niedersachsen", "hessen", "sachsen", "thüringen",
+    "thueringen", "schleswig-holstein", "rheinland-pfalz", "saarland",
+    "brandenburg", "mecklenburg",
+]
+SWITZERLAND_TOKENS = [
+    "switzerland", "schweiz", "suisse", "svizzera",
+    "zürich", "zurich", "bern", "basel", "geneva", "genf", "genève",
+    "lausanne", "lugano", "winterthur", "st. gallen", "st gallen",
+    "zug", "luzern", "lucerne",
+    "(ch)", "ch-", " ch,",
 ]
 REMOTE_TOKENS = [
     "remote", "remote-first", "fully remote", "fully-remote",
     "100% remote", "distributed", "anywhere", "work from home", "wfh",
+    "home office", "homeoffice", "telearbeit",
 ]
 EMEA_TOKENS = ["emea", "europe", "eu", "european union"]
 
@@ -255,9 +321,11 @@ def classify_location(job: Job) -> dict:
 
     Accessibility rules:
     - Stuttgart: any work-mode (onsite / hybrid / remote) is OK.
-    - Munich: must be at least hybrid (not pure onsite).
+    - Munich: hybrid OR remote OK (legacy concession).
     - Any other German city: remote required.
-    - Non-Germany: EU/EMEA remote or truly global remote required.
+    - Switzerland: remote required (any city).
+    - Non-DACH EU/EMEA: remote required.
+    - Truly global remote: OK unless clearly non-EU country tagged.
       A job tagged "Remote - US / India / ..." is NOT accessible.
 
     Strategy: trust the structured location field first; only fall back to
@@ -265,10 +333,12 @@ def classify_location(job: Job) -> dict:
     """
     loc = _lower(job.location)
     wt = _lower(job.workplace_type)
+    title_l = _lower(job.title)
 
     has_munich = "munich" in loc or "münchen" in loc or "munchen" in loc
     has_stuttgart = "stuttgart" in loc
     in_germany = any(t in loc for t in GERMANY_TOKENS)
+    in_switzerland = any(t in loc for t in SWITZERLAND_TOKENS)
     is_remote = "remote" in wt or any(t in loc for t in REMOTE_TOKENS)
     is_hybrid = "hybrid" in wt or "hybrid" in loc
     in_emea = any(t in loc for t in EMEA_TOKENS)
@@ -279,19 +349,34 @@ def classify_location(job: Job) -> dict:
         or bool(NON_EU_SUFFIX_RE.search(loc))
     )
 
-    # Only check description if the location field is completely empty.
-    # Avoids false positives where "Germany, Remote" appears somewhere in
-    # a multi-location listing whose actual primary location is New York.
+    # Always check the title for remote/hybrid signals (cheap and high signal):
+    # postings like "AI Engineer — Remote (Deutschland)" should not depend on
+    # the structured location field being empty.
+    if not is_remote and any(t in title_l for t in REMOTE_TOKENS):
+        is_remote = True
+    if not is_hybrid and "hybrid" in title_l:
+        is_hybrid = True
+
+    # Check description if the location field is empty OR if location lists
+    # only a German/Swiss city but no remote signal yet (common pattern:
+    # "Bamberg" in location field, but description says "Remote (Deutschland)").
+    desc = _lower(job.description_text)[:800]
     if not loc.strip():
-        desc = _lower(job.description_text)[:600]
         if not in_germany and ("germany" in desc or "deutschland" in desc):
             in_germany = True
-        if not is_remote and any(t in desc for t in REMOTE_TOKENS):
-            is_remote = True
+        if not in_switzerland and any(t in desc for t in SWITZERLAND_TOKENS):
+            in_switzerland = True
         if not has_munich and ("munich" in desc or "münchen" in desc):
             has_munich = True
         if not has_stuttgart and "stuttgart" in desc:
             has_stuttgart = True
+    # Remote signal: scan description even when location is set, but only
+    # the first ~800 chars (avoids false-positives from random "remote"
+    # mentions deep in the description like "remotely managed servers").
+    if not is_remote and any(t in desc for t in REMOTE_TOKENS):
+        is_remote = True
+    if not is_hybrid and "hybrid" in desc:
+        is_hybrid = True
 
     # Scan first 3000 chars of description for US work-authorization phrases.
     # These signal a US-only role regardless of the location field.
@@ -299,18 +384,20 @@ def classify_location(job: Job) -> dict:
         if US_WORK_AUTH_RE.search(job.description_text[:3000]):
             has_non_eu = True
 
-    # A job is EU-accessible when:
-    #   - It is in Germany, OR
+    # A job is DACH/EU-accessible when:
+    #   - It is in Germany or Switzerland, OR
     #   - It is in EMEA/Europe, OR
     #   - It is remote AND does not specify a clearly non-EU country.
     is_eu_accessible = (
         in_germany
+        or in_switzerland
         or in_emea
         or (is_remote and not has_non_eu)
     )
 
     return {
         "in_germany": in_germany,
+        "in_switzerland": in_switzerland,
         "is_remote": is_remote,
         "is_hybrid": is_hybrid,
         "in_emea": in_emea,
@@ -425,13 +512,15 @@ class FilterConfig:
     allow_no_senior_level: bool = True  # match "AI Engineer" too
     require_germany_or_remote: bool = True
     prefer_munich: bool = True
-    min_salary: int | None = 90000      # Only used to mark "salary_ok", not to drop
+    min_salary: int | None = 85000      # Only used to mark "salary_ok", not to drop
     exclude_junior: bool = True
     # Drop listings older than max_age_days (rolling window, not calendar year).
     # Jobs with no date are always kept. Set to 0 to disable.
     require_posted_in_current_year: bool = True  # kept for compat; uses max_age_days
     exclude_unknown_post_date: bool = False
     max_age_days: int = 365
+    # 'ai' → TITLE_MATCH  |  'ml' → TITLE_MATCH_ML
+    search_tag: str = 'ai'
 
 
 @dataclass
@@ -442,6 +531,7 @@ class MatchedJob:
     salary_signals: list[tuple[int, int | None]] = field(default_factory=list)
     salary_ok: bool | None = None   # None = unknown, True = signal >= min, False = below
     score_hints: list[str] = field(default_factory=list)
+    search_tag: str = 'ai'
 
     def as_dict(self) -> dict:
         return {
@@ -454,49 +544,98 @@ class MatchedJob:
         }
 
 
-def filter_jobs(jobs: Iterable[Job], cfg: FilterConfig) -> list[MatchedJob]:
+def _rej(log_list: list[dict] | None, reason: str, job: Job, extra: str = "") -> None:
+    """Append a rejection entry when the caller wants a log."""
+    if log_list is None:
+        return
+    log_list.append({
+        "reason": reason,
+        "title": job.title,
+        "company": job.company_display or job.company,
+        "location": job.location or "",
+        "posted_at": (job.posted_at or "")[:10],
+        "url": job.url or "",
+        "extra": extra,
+    })
+
+
+def filter_jobs(
+    jobs: Iterable[Job],
+    cfg: FilterConfig,
+    rejection_log: list[dict] | None = None,
+) -> list[MatchedJob]:
+    """
+    Filter jobs according to cfg.
+
+    If rejection_log is a list, append one entry per rejected job that matched
+    the title filter — useful for diagnosing over-filtering.
+    """
     matched: list[MatchedJob] = []
     skipped_post_year = 0
+    title_fn = title_matches_ml if cfg.search_tag == 'ml' else title_matches
 
     for job in jobs:
-        if not title_matches(job.title):
+        if not title_fn(job.title):
             continue
         if cfg.exclude_junior and is_junior_title(job.title):
+            _rej(rejection_log, "junior", job)
             continue
         if cfg.require_senior_title and not is_senior_title(job.title):
+            _rej(rejection_log, "not_senior", job)
             continue
 
         if cfg.require_posted_in_current_year and cfg.max_age_days > 0:
             if is_too_old(job.posted_at, cfg.max_age_days):
                 skipped_post_year += 1
+                _rej(rejection_log, "too_old", job, f"posted {(job.posted_at or '')[:10]}")
                 continue
             if job.posted_at is None and cfg.exclude_unknown_post_date:
                 skipped_post_year += 1
+                _rej(rejection_log, "too_old", job, "no date")
                 continue
 
         excl = is_excluded(job)
         if excl:
+            _rej(rejection_log, "company_excluded", job, excl)
             continue
 
         loc_flags = classify_location(job)
 
-        # --- Location gate 1: EU accessibility --------------------------------
-        # Drops jobs tied to non-EU countries (e.g. "Remote - US / India").
+        # --- Location gate 1: DACH/EU accessibility ---------------------------
         if not loc_flags["is_eu_accessible"]:
+            _rej(rejection_log, "non_eu", job, job.location or "")
             continue
 
-        # --- Location gate 2: Germany-specific work-mode rules ----------------
-        # Rules (in priority order):
-        #   Stuttgart  → any work-mode OK (onsite / hybrid / remote)
-        #   Munich     → hybrid OR remote required (pure onsite → skip)
-        #   Elsewhere  → remote required
-        if loc_flags["in_germany"] and not loc_flags["is_remote"]:
-            if loc_flags["has_stuttgart"]:
-                pass  # Stuttgart: onsite/hybrid/remote all fine
-            elif loc_flags["has_munich"] and loc_flags["is_hybrid"]:
-                pass  # Munich hybrid: acceptable
-            else:
-                continue  # Munich onsite or other German city non-remote: skip
+        # --- Location gate 2: Germany/Switzerland work-mode rules ------------
+        #   Stuttgart       → any work-mode OK (can commute)
+        #   Other DE / CH   → remote OR hybrid OK (scorer decides if hybrid
+        #                     is acceptable based on described office cadence;
+        #                     "hybrid" semantically ranges from 4 days/week
+        #                     to 1 day/month at different companies)
+        #   Pure onsite outside Stuttgart → reject
+        #   No location     → keep (let scorer decide; many listings hide it)
+        loc_empty = not (job.location or "").strip()
+
+        def _is_pure_onsite() -> bool:
+            return not (loc_flags["is_remote"] or loc_flags["is_hybrid"])
+
+        if (
+            loc_flags["in_germany"]
+            and _is_pure_onsite()
+            and not loc_flags["has_stuttgart"]
+        ):
+            _rej(rejection_log, "germany_onsite", job,
+                 f"{job.location} | wt={job.workplace_type}")
+            continue
+
+        if (
+            loc_flags["in_switzerland"]
+            and not loc_flags["in_germany"]
+            and _is_pure_onsite()
+        ):
+            _rej(rejection_log, "switzerland_onsite", job,
+                 f"{job.location} | wt={job.workplace_type}")
+            continue
 
         reasons: list[str] = []
         if is_senior_title(job.title):
@@ -511,13 +650,16 @@ def filter_jobs(jobs: Iterable[Job], cfg: FilterConfig) -> list[MatchedJob]:
             reasons.append("hybrid")
         if loc_flags["in_germany"]:
             reasons.append("Germany")
+        elif loc_flags["in_switzerland"]:
+            reasons.append("Switzerland")
         elif loc_flags["in_emea"]:
             reasons.append("EMEA-wide")
+        if loc_empty:
+            reasons.append("no location (tolerated)")
 
         sigs = extract_salary_signals(job)
         salary_ok: bool | None = None
         if sigs and cfg.min_salary:
-            # Use the highest max (or min when no max) as the optimistic number
             best = max((b if b else a) for (a, b) in sigs)
             salary_ok = best >= cfg.min_salary
 
@@ -530,13 +672,14 @@ def filter_jobs(jobs: Iterable[Job], cfg: FilterConfig) -> list[MatchedJob]:
         matched.append(MatchedJob(
             job=job, reasons=reasons, location_flags=loc_flags,
             salary_signals=sigs, salary_ok=salary_ok, score_hints=hints,
+            search_tag=cfg.search_tag,
         ))
 
     if skipped_post_year:
         log.info(
-            "filter: excluded %d job(s) (not posted in calendar year %s)",
+            "filter: excluded %d job(s) (older than %d days)",
             skipped_post_year,
-            current_year,
+            cfg.max_age_days,
         )
 
     return matched
@@ -551,18 +694,21 @@ def rank_score(m: MatchedJob) -> tuple[int, int, str]:
       1. Munich (hybrid/remote) or Stuttgart
       2. Germany remote
       3. Senior title
-      4. Salary signal present and >= 90k
+      4. Salary signal present and >= 85k
     """
     j = m.job
+    flags = m.location_flags
     score = 0
-    if m.location_flags.get("has_munich"):
-        score += 40
-    if m.location_flags.get("has_stuttgart"):
-        score += 35
-    if m.location_flags.get("is_remote"):
+    if flags.get("has_stuttgart"):
+        score += 45
+    if flags.get("has_munich"):
         score += 30
-    if m.location_flags.get("in_germany"):
+    if flags.get("is_remote"):
+        score += 30
+    if flags.get("in_germany"):
         score += 15
+    if flags.get("in_switzerland") and flags.get("is_remote"):
+        score += 20
     if is_senior_title(j.title):
         score += 20
     if m.salary_ok is True:

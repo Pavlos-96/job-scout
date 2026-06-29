@@ -87,15 +87,80 @@ async def main_async(args):
         data = json.loads(Path(args.companies).read_text())
         companies = data if isinstance(data, list) else data.get("companies", [])
     else:
-        companies = COMPANIES
+        companies = list(COMPANIES)
 
     if args.test_tokens:
         await probe_tokens(companies)
         return
 
-    log.info("Fetching jobs from %d companies...", len(companies))
-    jobs = await fetch_all(companies, concurrency=args.concurrency)
-    log.info("Raw jobs fetched: %d", len(jobs))
+    serper_key = os.environ.get("SERPER_API_KEY", "").strip()
+
+    # --- Dorks-only mode: skip companies.py entirely ------------------------
+    # Pure Google-Dorks discovery — search Google, follow each hit back to its
+    # ATS, fetch exactly the matching jobs. Independent of any company list.
+    if args.dorks_only:
+        if not serper_key:
+            print(
+                "\n✗ --dorks-only braucht SERPER_API_KEY in .env\n"
+                "  Kostenlos: https://serper.dev (2.500 Suchen/Monat gratis)\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        log.info("Dorks-only Modus: companies.py wird ignoriert.")
+        from serper_discover import dorks_find_jobs
+        jobs = await dorks_find_jobs(serper_key, max_queries=args.max_queries)
+        log.info("Dorks-only: %d Jobs via Google → ATS gefunden", len(jobs))
+    else:
+        # --- Serper job search: targeted dorks → full jobs for NEW companies -
+        extra_jobs: list = []
+        if args.serper_jobs and serper_key:
+            log.info(
+                "Serper-Suche: starte ~35 gezielte Job-Dorks auf 6 ATS..."
+            )
+            from serper_discover import serper_find_jobs
+            extra_jobs = await serper_find_jobs(serper_key)
+            log.info(
+                "Serper-Suche: %d zusätzliche Jobs aus neu entdeckten Firmen",
+                len(extra_jobs),
+            )
+        elif args.serper_jobs and not serper_key:
+            log.warning(
+                "--serper-jobs: SERPER_API_KEY nicht gesetzt, übersprungen"
+            )
+
+        # --- Live discovery (manual/scheduled — adds to companies.py) ------
+        if args.live_discover and serper_key:
+            mode = "full" if args.live_discover_full else "focused"
+            log.info("Live-Discover: starte per-city Dorks (mode=%s)...", mode)
+            from serper_discover import discover_live
+            new_companies = await discover_live(
+                serper_key,
+                save_to_companies=args.save_discovered,
+                mode=mode,
+            )
+            if new_companies:
+                existing_keys = {(c["ats"], c["token"]) for c in companies}
+                added = [
+                    c for c in new_companies
+                    if (c["ats"], c["token"]) not in existing_keys
+                ]
+                companies.extend(added)
+                log.info(
+                    "Live-Discover: %d neue Firmen zur Fetch-Liste hinzugefügt",
+                    len(added),
+                )
+        elif args.live_discover and not serper_key:
+            log.warning(
+                "--live-discover: SERPER_API_KEY nicht gesetzt, übersprungen"
+            )
+
+        log.info("Fetching jobs from %d companies...", len(companies))
+        jobs = await fetch_all(companies, concurrency=args.concurrency)
+        jobs.extend(extra_jobs)
+        log.info(
+            "Raw jobs fetched: %d (incl. %d Serper-Suche)",
+            len(jobs), len(extra_jobs),
+        )
 
     cfg = FilterConfig(
         require_senior_title=args.senior_only,
@@ -133,18 +198,19 @@ async def main_async(args):
             print("\n✗ openai package missing. Run: pip install openai\n", file=sys.stderr)
             sys.exit(1)
 
-        from src.scorer import score_all
+        from src.scorer import score_all, DEFAULT_MODEL
         from src.cache import ScoreCache
 
         cache = None if args.no_cache else ScoreCache(ROOT / "cache" / "scores.json")
         if cache:
             log.info("Score cache: %s", ROOT / "cache" / "scores.json")
 
-        log.info("Scoring %d matches with LLM (%s)...", len(matches), args.model)
+        model = args.model or DEFAULT_MODEL
+        log.info("Scoring %d matches with LLM (%s)...", len(matches), model)
         scored_pairs = await score_all(
             matches,
             api_key=api_key,
-            model=args.model,
+            model=model,
             concurrency=args.score_concurrency,
             cache=cache,
         )
@@ -176,7 +242,7 @@ async def main_async(args):
 
 def main():
     p = argparse.ArgumentParser(description="Job Scout — AI Engineer roles in DE/EU")
-    p.add_argument("--min-salary", type=int, default=90000)
+    p.add_argument("--min-salary", type=int, default=85000)
     p.add_argument("--senior-only", action="store_true")
     p.add_argument("--munich-only", action="store_true")
     p.add_argument("--worldwide", action="store_true")
@@ -189,8 +255,8 @@ def main():
                    help="Score matches with LLM (requires OpenAI API key)")
     p.add_argument("--api-key", type=str, default=None,
                    help="OpenAI API key (or set OPENAI_API_KEY env var)")
-    p.add_argument("--model", type=str, default="gpt-4o-mini",
-                   help="OpenAI model to use (default: gpt-4o-mini)")
+    p.add_argument("--model", type=str, default=None,
+                   help="OpenAI model to use (default: src.scorer.DEFAULT_MODEL)")
     p.add_argument("--score-concurrency", type=int, default=5,
                    help="Parallel LLM calls (default: 5)")
     p.add_argument("--no-cache", action="store_true",
@@ -199,6 +265,29 @@ def main():
                    help="Keep listings whose posted year is not the current year")
     p.add_argument("--exclude-undated-jobs", action="store_true",
                    help="Drop jobs when the ATS provides no posted/created date")
+    # Serper job search (primary Serper path — ~35 credits per run)
+    p.add_argument("--serper-jobs", action="store_true",
+                   help="Run ~35 targeted dorks via Serper, fetch full jobs from "
+                        "newly found companies (requires SERPER_API_KEY in .env)")
+    # Dorks-only mode: skip companies.py entirely, search Google for individual
+    # job postings and fetch only those exact matches.
+    p.add_argument("--dorks-only", action="store_true",
+                   help="Pure Google Dorks: ignore companies.py, find jobs "
+                        "directly via Serper and fetch only the matching "
+                        "postings from each ATS (requires SERPER_API_KEY)")
+    p.add_argument("--max-queries", type=int, default=None,
+                   help="With --dorks-only: hard cap on Serper queries "
+                        "(default: ~35 from _build_job_search_dorks)")
+    # Live discovery (periodic manual task — adds to companies.py)
+    p.add_argument("--live-discover", action="store_true",
+                   help="Run per-city × role Serper dorks to expand companies.py "
+                        "(use manually / weekly, not on every run)")
+    p.add_argument("--live-discover-full", action="store_true",
+                   help="With --live-discover: use comprehensive mode "
+                        "(~2600 Serper queries, slow + expensive)")
+    p.add_argument("--save-discovered", action="store_true",
+                   help="Save newly discovered companies to src/companies.py "
+                        "(use together with --live-discover)")
     p.add_argument("-v", "--verbose", action="store_true")
 
     args = p.parse_args()

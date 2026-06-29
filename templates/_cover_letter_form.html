@@ -19,6 +19,14 @@
     </div>
 </form>
 
+<div class="refine-context" data-job-id="{{ job.id }}" hidden>
+    <input type="hidden" id="refine-lang-{{ job.id }}" name="lang" value="{{ lang or '' }}">
+    <input type="hidden" id="refine-role-{{ job.id }}" name="role_focus" value="{{ role_focus or 'ai_engineer' }}">
+    <input type="hidden" id="refine-remote-{{ job.id }}" name="remote_pref" value="{{ remote_pref or '' }}">
+    <input type="hidden" id="refine-salary-{{ job.id }}" name="salary" value="{{ salary or '' }}">
+    <input type="hidden" id="refine-locpref-{{ job.id }}" name="location_pref" value="{{ location_pref or '' }}">
+</div>
+
 <div class="refine-section">
     <label class="refine-label">Text überarbeiten</label>
     <div class="refine-row">
@@ -28,7 +36,7 @@
                   placeholder="z.B. &quot;Kürze den Einstieg auf einen Satz&quot; oder &quot;Mach den zweiten Absatz konkreter&quot;"></textarea>
         <button class="btn btn-secondary"
                 hx-post="/jobs/{{ job.id }}/cover-letter/refine"
-                hx-include="#cover-subject, #cover-content, #refine-instruction-{{ job.id }}"
+                hx-include="#cover-subject, #cover-content, #refine-instruction-{{ job.id }}, #refine-lang-{{ job.id }}, #refine-role-{{ job.id }}, #refine-remote-{{ job.id }}, #refine-salary-{{ job.id }}, #refine-locpref-{{ job.id }}"
                 hx-target="#cover-form-area"
                 hx-swap="innerHTML"
                 hx-indicator="#refine-spinner-{{ job.id }}">

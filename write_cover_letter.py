@@ -50,6 +50,76 @@ log = logging.getLogger("cover_letter")
 
 
 # ---------------------------------------------------------------------------
+# CV loader — pulls the live HTML CV into a plain-text block the LLM can use
+#
+# The HTML CV is the single source of truth for projects, stack, education and
+# certifications. By reading it on every run we don't need to keep a parallel
+# project list in code.
+# ---------------------------------------------------------------------------
+
+CV_PATH = Path(
+    os.environ.get(
+        "CV_HTML_PATH",
+        "/Users/pmusenidis/Documents/Musenidis_Lebenslauf/pavlos_cv_merged.html",
+    )
+)
+
+_CV_TAG_RE = re.compile(r"<[^>]+>")
+_CV_STYLE_RE = re.compile(
+    r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL
+)
+_CV_WS_RE = re.compile(r"[ \t]+")
+_CV_NEWLINES_RE = re.compile(r"\n{3,}")
+_cv_text_cache: str | None = None
+
+
+def _html_to_text(html_src: str) -> str:
+    """Best-effort HTML → plain text, preserves block-level line breaks."""
+    src = _CV_STYLE_RE.sub(" ", html_src)
+    block_tags = (
+        "p", "div", "section", "h1", "h2", "h3", "h4", "h5", "h6",
+        "li", "tr", "br",
+    )
+    for tag in block_tags:
+        src = re.sub(
+            rf"<{tag}[^>]*>", "\n", src, flags=re.IGNORECASE,
+        )
+        src = re.sub(rf"</{tag}>", "\n", src, flags=re.IGNORECASE)
+    src = _CV_TAG_RE.sub(" ", src)
+    src = (src
+           .replace("&nbsp;", " ")
+           .replace("&amp;", "&")
+           .replace("&lt;", "<")
+           .replace("&gt;", ">")
+           .replace("&quot;", "\"")
+           .replace("&#39;", "'"))
+    lines = [_CV_WS_RE.sub(" ", line).strip() for line in src.split("\n")]
+    lines = [line for line in lines if line]
+    out = "\n".join(lines)
+    return _CV_NEWLINES_RE.sub("\n\n", out)
+
+
+def load_cv_text(force_reload: bool = False) -> str:
+    """Read the CV HTML once per process, return cleaned plain text.
+
+    Returns an empty string if the file is missing, so the prompt builder can
+    fall back to the inline PROFILE constant.
+    """
+    global _cv_text_cache
+    if _cv_text_cache is not None and not force_reload:
+        return _cv_text_cache
+    try:
+        raw = CV_PATH.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        log.warning("CV file not readable at %s: %s", CV_PATH, exc)
+        _cv_text_cache = ""
+        return ""
+    _cv_text_cache = _html_to_text(raw)
+    log.info("CV loaded from %s (%d chars)", CV_PATH, len(_cv_text_cache))
+    return _cv_text_cache
+
+
+# ---------------------------------------------------------------------------
 # Re-fetch job from URL — auto-detect ATS
 # ---------------------------------------------------------------------------
 
@@ -136,309 +206,467 @@ async def fetch_job_from_url(url: str) -> dict | None:
 # Style-engineered system prompt
 # ---------------------------------------------------------------------------
 
-PROFILE = """
-Pavlos Musenidis — AI Engineer
+PROFILE_PREFERENCES = """
+Pavlos Musenidis arbeitet aktuell als AI Engineer bei Ippen Digital, Deutschlands
+größtem lokalen Journalismus-Netzwerk mit über 250 Portalen. Seit September 2023,
+also über 2,5 Jahre. Alle Projekte, Stack-Komponenten, Ausbildungs- und
+Zertifikatsangaben kommen aus dem CV-Block unten. Erfinde nichts darüber hinaus.
 
-Aktuelle Rolle: AI Engineer bei Ippen Digital (seit September 2023, über 2,5 Jahre).
-Ippen Digital ist eines der größten lokalen Journalismus-Netzwerke in Deutschland (über 250 Portale).
-
-Vorige Rollen:
-- Working Student Software Engineering bei AX Semantics (Jun-Dez 2022, 6 Monate)
-- Data Science Intern bei Porsche AG (Mai-Nov 2021, 6 Monate)
-
-Ausbildung:
-- M.Sc. Computational Linguistics, Universität Stuttgart (2020-2023, Note 1,8)
-  Schwerpunkte: ML/DL, NLP mit Transformer-Architekturen, Sequence Modeling.
-  Theoretisches Fundament hinter LLMs (Attention, Tokenization, Fine-Tuning-Konzepte).
-- B.A. Linguistics, Universität Stuttgart (2015-2020, Note 2,0)
-
-Zertifikate: AWS Cloud Practitioner Essentials, Linux Essentials.
-
-Stack (täglich produktiv):
-- Python (primär), FastAPI, Async, Pytest, Pydantic, Poetry
-- LangChain, LangGraph, LiteLLM, OpenAI, Anthropic, Google
-- PostgreSQL, Milvus (Vector DB), Redis
-- AWS (S3, SageMaker, Secrets Manager), GCP, Kubernetes, Docker
-- Grafana, Kibana, Elasticsearch, CI/CD
-- Cursor, Claude Code (strategisch eingesetzt, nicht als Ersatz für Architekturverständnis)
-
-Verfügbarkeit: kurzfristig (etwa 2-3 Wochen).
-Wohnort: Stuttgart. Bevorzugt 100% remote oder hybrid mit Pendeln nach München oder Stuttgart.
-
-=== PROJEKTE — NUR AUSWÄHLEN WAS ZUR STELLE PASST (max. 2) ===
-
-STANDARD (immer verwendbar, wenn nichts Spezifischeres passt):
-- Pilot (Editorial Automation Platform): Streamlit-Plattform, über 500 täglich aktive User,
-  600+ registrierte Redakteure. Use-Cases direkt mit Redakteuren entwickelt, iteriert,
-  getestet. Mehrere FastAPI-Backends.
-- Wahlautomatisierung: Multi-Stage-Pipeline mit Quality Gates (Fact-Checking,
-  Grammatik-Verifikation, Style-Compliance). Zwei Projekte: Kommunalwahlen (über 1.700
-  automatisierte Artikel) und Bundestagswahl 2025 (über 7.000 Artikel in drei Phasen,
-  mission-critical Deadlines). WICHTIG: Nur nennen welche Wahl zur Stelle/Firma passt,
-  oder einfach "Wahlautomatisierung" ohne spezifische Wahl wenn unklar.
-
-NUR WENN RAG / Chatbots / Vector Search / Knowledge-Base in der Stellenbeschreibung:
-- OpenOlat Enterprise Chatbot: LangGraph ReAct Agents, Milvus Vector DB, GCP-Integration.
-  Knowledge-Base-Suche für Lernmanagement-System (Prototype/PoC).
-
-NUR WENN Architektur / Workflow-Engine / Backend / API-Integrationen im Fokus:
-- Tintin (AI Workflow Engine): Komplett selbst entwickeltes Workflow-Orchestrierungssystem,
-  konzeptionell ähnlich n8n. Modulare, hoch erweiterbare Architektur, eigene Workflow-Engine,
-  API-Integrationen zu Dutzenden externen Diensten, Migration von Monolith zu Microservices.
-
-NUR WENN Frontend / UX / Tool-Entwicklung mit Endnutzern / Consulting explizit gefragt:
-- Pilot (Details): Use-Cases wurden direkt mit Redakteuren entwickelt (Requirements-Gespräche,
-  Testing-Sessions, Feedback-Loops). Frontend mittels Streamlit, auf die Bedürfnisse der
-  Redaktion zugeschnitten. Pavlos kannte die Nutzer persönlich.
-
-NUR WENN Docker / Kubernetes / DevOps / Infrastructure relevant:
-- Kubernetes/AWS durchgehend seit Beginn bei Ippen Digital: Logging-Stack (Grafana, Kibana,
-  Elasticsearch), CI/CD, Ressourcen-Tuning, Secrets Management, Image-Builds,
-  Deployment-Automatisierung. Kein Ops-Spezialist, aber produktiv und self-sufficient.
-
-NUR WENN ML-Training / Research / Modellentwicklung / Data Science gefragt:
-- M.Sc. Computational Linguistics mit ML/DL-Schwerpunkt. Versteht das theoretische Fundament
-  (Attention-Mechanismen, Transformer-Training, Fine-Tuning-Konzepte). Bei Ippen auf
-  Applikationsebene, aber das Fundament ist vorhanden.
-
-Motivation für sinnstiftende Stellen: ECHT. Gesundheit, Bildung, Energiewende,
-Barrierefreiheit, öffentlicher Sektor — das soll im ersten Absatz als echte Motivation
-auftauchen, nicht aufgesetzt.
-
-=== TONALITÄT (Meta) ===
-
-Pavlos schreibt trocken, beobachtend, leicht analytisch. Er bewertet nicht ("X ist hart",
-"das ist beeindruckend"), er beobachtet ("Bei X liegt Y zwischen Z"). Er lobt nicht
-("eure Mission begeistert mich"), er zeigt Interesse durch Konkretheit. Er ist nie
-performativ. Wenn ein Satz so klingt als könnte ihn jeder zweite Bewerber schreiben,
-ist er falsch.
+Verfügbarkeit: kurzfristig, mindestens 2 Wochen.
+Wohnort: Stuttgart. Präferenz 100% remote oder hybrid mit Pendeln nach München
+oder Stuttgart.
+Sprachen: Deutsch Muttersprache, Englisch fließend.
 """
 
-REFERENCE_LETTER = """
-Hallo zusammen,
+FAKTENTREUE = """
+Anti-Halluzinations-Regeln. Diese gelten kompromisslos, weil das LLM hier
+historisch konsistent danebenliegt.
 
-Im Stellentext ist mir hängen geblieben, dass das LLM-Engineering bei euch direkt am
-Produkt sitzt und nicht in einer separaten Innovation-Spur. Genau das ist mein
-Hintergrund: über 2,5 Jahre LLM-Pipelines im Produktionsbetrieb, nicht als PoC.
+1. Wahlautomatisierung 2025: drei Wahlzyklen in NRW, Bayern und Hessen.
+   NICHT als Bundestagswahl benennen. NRW war Co-Lead-Rolle (zweiter Entwickler),
+   Bayern und Hessen war Pavlos alleiniger Owner. Gesamt über 7.000 Artikel über
+   2.600+ Kommunen, über 1 Million Pageviews. Wenn unklar welche Wahl im Brief
+   passt, neutral von "Wahlautomatisierung 2025" sprechen.
 
-Seit über 2,5 Jahren arbeite ich als AI Engineer bei Ippen Digital, einem der größten
-lokalen Journalismus-Netzwerke in Deutschland mit über 250 Portalen. Mein täglicher
-Stack ist Python mit FastAPI, LangChain/LangGraph und LiteLLM, deployt auf Kubernetes
-in AWS.
+2. Central AI Workflow Engine: Pavlos war CO-DEVELOPER, NICHT alleiniger
+   Architekt. Auch nicht "ich habe konzipiert", auch nicht "von mir gebaut".
+   Der ehrliche Ausdruck ist "mitentwickelt" oder "Co-Developer".
 
-Ein konkretes Projekt von mir war die Artikelautomatisierung zur Bundestagswahl. Über
-7.000 Artikel haben wir in drei Phasen ausgeliefert, mit harten Deadlines und einer
-mehrstufigen Pipeline für Fact-Checking und Style-Compliance. Falsche Inhalte hätten
-juristische Folgen gehabt, also musste das Quality Gating sitzen.
+3. Enterprise Chatbot Prototype: KEINEN spezifischen Kunden namentlich nennen
+   (kein "OpenOlat" oder ähnliches). Bleibt bei "Enterprise Chatbot Prototype".
 
-Python ist meine tägliche Arbeitssprache. Mit neueren AI-Tools wie Cursor und Claude
-Code arbeite ich gerne und sehe darin einen deutlichen Effizienzgewinn, gerade in
-Kombination mit eigener Architekturarbeit.
+4. Keine Erfindung von Zahlen, Projekten, Frameworks oder Erfahrungen, die nicht
+   im CV stehen. Wenn etwas im Posting verlangt wird und im CV nicht steht,
+   weglassen statt erfinden. Lieber ein kürzerer Brief als eine Lüge.
+"""
 
-Ich bin kurzfristig verfügbar. Über ein Kennenlernen würde ich mich freuen.
+MOTIVATION = """
+Pavlos legt Wert darauf zu wissen, wofür er baut. Wenn die Stelle erkennbar
+sinnstiftend ist (Gesundheit, Bildung, Energie, Barrierefreiheit, öffentlicher
+Sektor, echter Nutzer-Impact), darf das Motiv im Hook auftauchen, aber nüchtern
+und ohne PR-Wording. Wenn das nicht zur Stelle passt, weglassen.
+"""
+
+TONALITAET = """
+Pavlos schreibt sachlich, beobachtend, leicht analytisch. Er bewertet nicht
+("X ist beeindruckend", "Y ist hart"), er beobachtet ("Bei X liegt Y zwischen
+Z"). Er lobt keine Firmen ("eure Mission begeistert mich"), er zeigt Interesse
+durch Konkretheit. Er ist nie performativ. Wenn ein Satz so klingt als könnte
+ihn jeder zweite Bewerber schreiben, ist er falsch.
+
+"Nicht performativ" heißt konkret: keine Bewerber-Standardfloskeln, keine
+Selbstbewertung, keine Begeisterungssignale ohne Substanz. Pavlos formuliert
+Aussagen über seine Arbeit oder Beobachtungen über die Stelle, keine
+Anpreisungen seiner Person.
+"""
+
+# ---------------------------------------------------------------------------
+# Optional prompt blocks — only injected when the user fills them in.
+# Keeps the base prompt lean for the default case (AI Engineer, no special
+# remote/salary/location signal) and lets the user steer for non-default
+# applications (consulting, ML focus, far-from-Stuttgart locations etc).
+# ---------------------------------------------------------------------------
+
+ROLE_FOCUS_BLOCKS = {
+    "ai_engineer": """
+ROLLEN-FOKUS  AI Engineer (Pavlos' Tagesgeschäft).
+
+Kein Umschwung zu erklären, das ist exakt sein Feld. Wenn die Stelle ein
+erkennbar besseres Setup bietet (mehr Ownership, breitere Themen,
+stärkeres Team, klareres Produkt, größerer Wachstumsraum), darf das im
+Hook oder Match-Absatz andocken. Die sinngemäße Linie ist, dass Pavlos
+mag was er tut, aber eine neue Arbeitsumgebung sucht in der er weiter
+wachsen kann. Den aktuellen Arbeitgeber nicht abwerten.
+""",
+    "ai_consultant": """
+ROLLEN-FOKUS  AI Consultant / Consulting AI Engineer.
+
+Pavlos bewirbt sich gezielt auf eine Consulting-Rolle, weil ihm die
+Konzept- und MVP-Phase besonders liegt und er die Abwechslung zwischen
+verschiedenen Projekten und Kunden schätzt. Dieses Motiv darf sachlich
+im Hook oder Match-Absatz auftauchen, mit Beleg aus seinem bisherigen
+Tun. Belegmaterial findest du im CV (Aufbau der AI-Pipeline von Null
+bei Ippen Digital, mehrere Use-Cases im Pilot eigenständig konzipiert,
+direkte Stakeholder-Arbeit mit den Redaktionen).
+
+Stärken die hier zählen sind End-to-End-Ownership, schnell von
+Anforderung zur Architektur, MVP- und Prototyp-Mentalität, direkter
+Umgang mit nicht-technischen Stakeholdern.
+
+Verboten sind Floskeln wie "spannende Vielfalt", "abwechslungsreiche
+Projekte" oder "Begeisterung für Beratung". Das Motiv soll als nüchterne
+Präferenz formuliert sein, nicht als Marketing-Aussage.
+""",
+    "ml_engineer": """
+ROLLEN-FOKUS  ML Engineer / ML Specialist.
+
+Pavlos kommt aus der LLM-Anwendungsseite und bewirbt sich auf eine
+ML-zentrische Rolle. Sein Umschwung-Motiv hat zwei Teile.
+
+Fachlich begründet, M.Sc. Computational Linguistics mit Schwerpunkt
+Deep Learning für NLP, Master-Thesis zu T5-Fine-Tuning, Erfahrung mit
+Fine-Tuning von Open-Source-Modellen deployt via AWS SageMaker bei
+Ippen Digital. Das Fundament ist vorhanden.
+
+Beobachtungsbasiert, für viele konkrete Aufgaben sind spezialisierte
+Modelle (kleiner, gezielt trainiert, deterministischer) die bessere
+Lösung als generische LLMs. Genau in dieser Richtung will Pavlos sich
+jetzt vertiefen.
+
+Dieses Doppelmotiv darf sachlich im Hook oder Match-Absatz auftauchen,
+am besten ein Satz pro Teil. Stärken die hier zählen sind das Studium,
+Fine-Tuning-Erfahrung und die produktionsseitige Sicht auf wo LLM
+aufhört und spezialisierte Modelle anfangen.
+
+Verboten sind Selbstüberhöhung im ML-Theorie-Bereich,
+"leidenschaftlicher ML-Forscher"-Sprache und Überverkaufen des
+akademischen Hintergrunds.
+""",
+}
+
+REMOTE_PREF_BLOCKS = {
+    "remote_with_visits": """
+SETUP-WUNSCH  Vollremote mit gelegentlichen Vor-Ort-Besuchen (etwa
+einmal im Monat bis alle zwei Monate).
+
+Wenn die Stelle dieses Setup nicht von vornherein anbietet ODER wenn
+der Standort weit von Stuttgart entfernt ist, das einmal kurz und
+sachlich im Brief klarstellen. Sinnvoller Platz ist der Schluss-Absatz
+nahe der Verfügbarkeits-Zeile. Wenn die Stelle sowieso vollremote
+ausgeschrieben ist und Standort egal ist, weglassen.
+""",
+    "hybrid_weekly": """
+SETUP-WUNSCH  Hybrid mit etwa einem Vor-Ort-Tag pro Woche.
+
+Das passt typischerweise bei Standorten im Pendel-Radius von Stuttgart
+(etwa eine Stunde oder weniger, zum Beispiel Heidelberg, Karlsruhe,
+Tübingen, Mannheim). Wenn die Stelle eine höhere Vor-Ort-Frequenz
+erwartet (drei Tage, vier Tage, fünf Tage pro Woche), einen Satz dazu
+der Pavlos' realistische Frequenz benennt. Wenn die Stelle sowieso
+flexibel hybrid ist, weglassen.
+""",
+    "remote_only": """
+SETUP-WUNSCH  Vollständig remote, ohne regelmäßige Vor-Ort-Termine.
+
+Wenn die Stelle vor-Ort-Anwesenheit verlangt oder kein klares
+Remote-Setup beschreibt, das einmal kurz und sachlich im Brief
+klarstellen, am besten im Schluss-Absatz. Wenn die Stelle sowieso
+vollremote ausgeschrieben ist, weglassen.
+""",
+}
+
+
+def _salary_block(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return f"""
+GEHALTSVORSTELLUNG  {value}
+
+Pavlos möchte das Gehaltsband im Brief erwähnen. Sachlich, in einem
+einzelnen Satz, am besten im Schluss-Absatz vor der Verfügbarkeit. Kein
+Verhandlungs-Wording, kein "im Rahmen von", einfach die genannte Angabe
+übernehmen. Wenn die Angabe ein Bereich ist (zum Beispiel "85-90k"), als
+Bereich übernehmen.
 """
 
 
-def build_system_prompt(form: str, lang: str = "de") -> str:
+def _location_pref_block(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return f"""
+STANDORT-PRÄFERENZ  {value}
+
+Die Stelle ist offenbar für mehrere Standorte ausgeschrieben. Pavlos
+bevorzugt den oben genannten. Das einmal kurz im Brief klarmachen,
+sinnvoller Platz ist der Schluss-Absatz oder bei der Verfügbarkeit.
+Sachlich, ohne lange Begründung.
+"""
+
+
+# Short voice samples to calibrate tone without giving a copy-paste template.
+# Each pair shows ONE typical move Pavlos would make and the LLM-default he
+# would NOT make. The model picks up the rhythm and avoidance patterns from
+# these without inheriting a full letter structure.
+VOICE_SAMPLES = """
+So klingt Pavlos. So klingt er nicht.
+
+GUT: "Was in der Stellenbeschreibung steht, beschreibt ziemlich genau, was ich
+      seit über 2,5 Jahren bei Ippen Digital tue."
+NICHT: "Mit großem Interesse habe ich Ihre Stellenanzeige gelesen und möchte
+       mich hiermit auf die ausgeschriebene Position bewerben."
+
+GUT: "Die Pipeline läuft seit über einem Jahr in Produktion, etwa 100 Aufrufe
+      pro Tag."
+NICHT: "Ich konnte erfolgreich umfangreiche Erfahrungen im Bereich
+       Production-LLM-Pipelines sammeln."
+
+GUT: "Bei Ippen Digital baue ich Multi-Step-LLM-Pipelines mit LangChain und
+      Multi-Provider-Setup."
+NICHT: "Mein umfangreiches Knowhow im Bereich Production-AI bringe ich gerne
+       in Ihr dynamisches Team ein."
+
+GUT: "An Engineering reizt mich die Phase, in der der Lösungsweg noch nicht
+      feststeht. Genau das habe ich bei Ippen Digital von Null aufgebaut."
+NICHT: "Ich bin leidenschaftlich daran interessiert, an spannenden und
+       zukunftsweisenden AI-Projekten mitzuwirken."
+
+GUT: "Multi-Provider-LLM-Orchestrierung über OpenAI, Anthropic und Google ist
+      seit über 2,5 Jahren mein Tagesgeschäft."
+NICHT: "Meine ausgeprägte Expertise in Multi-Provider-LLM-Orchestrierung
+       qualifiziert mich ideal für diese spannende Herausforderung."
+"""
+
+
+def build_system_prompt(
+    lang: str = "de",
+    role_focus: str = "ai_engineer",
+    remote_pref: str = "",
+    salary: str = "",
+    location_pref: str = "",
+) -> str:
+    """Build the cover-letter system prompt.
+
+    Same prompt is used for fresh generation and for refining an existing
+    letter. The caller decides what to put in the user message (job posting
+    for generation, existing letter + change request for refinement).
+
+    Optional steering parameters (only inject prompt blocks when set):
+      role_focus    one of "ai_engineer" (default), "ai_consultant", "ml_engineer"
+      remote_pref   one of "", "remote_with_visits", "hybrid_weekly", "remote_only"
+      salary        free text, e.g. "85-90k EUR"
+      location_pref free text, e.g. "Heidelberg" for multi-location postings
+
+    The Du/Sie decision is delegated to the model based on the job posting
+    style (du-Posting → Du, Sie-Posting or formal corporate → Sie).
+    """
     anrede_form = (
-        "Verwende durchgehend die Du-Form (du, dich, deine, euch, ihr für die Firma)."
-        if form == "du"
-        else "Verwende durchgehend die Sie-Form (Sie, Ihnen, Ihre)."
+        "ANREDE-FORM (Du oder Sie) leitest du aus dem Stellenposting ab. "
+        "Wenn die Stelle dich klar duzt (du, deine, euch, ihr) oder erkennbar "
+        "Startup/Du-Kultur signalisiert (zum Beispiel Hallo statt Sehr "
+        "geehrte, casual Tonalität, Tech-Startup-Branding), antwortest du im "
+        "ganzen Brief konsistent auf Du. Wenn die Stelle siezt (Sie, Ihre) "
+        "oder erkennbar konservativ/Konzern wirkt, antwortest du konsistent "
+        "auf Sie. Wenn das Posting auf Englisch ist, entfällt die "
+        "Du/Sie-Frage, dann gelten die englischen Anrede- und Schluss-Regeln "
+        "weiter unten. Bei Unklarheit auf Deutsch wählst du Sie, weil das "
+        "der konservativere Default ist."
     )
 
     if lang == "en":
         opening = (
             "You are writing a cover letter for Pavlos Musenidis. "
-            "Write the ENTIRE letter in English — subject line, body, everything. "
-            "The instructions below are in German for internal reference only — "
-            "the OUTPUT must be in English. "
-            "It must sound like him — direct, analytical, no AI smell."
+            "Write the entire letter in English including the subject line. "
+            "Internal instructions stay in German but the output must be English. "
+            "It must sound like him, direct and analytical, with no AI smell."
         )
         lang_reminder = (
-            "\n\nCRITICAL REMINDER: Write the cover letter in ENGLISH. "
+            "\n\nCRITICAL REMINDER. Write the cover letter in English. "
             "Every sentence of the output must be in English. "
-            "The BETREFF line must also be in English (use 'RE:' or just the subject)."
+            "The BETREFF line must also be in English, use 'RE:' or just the subject."
         )
     else:
         opening = (
             "Du schreibst ein Anschreiben für Pavlos Musenidis. "
-            "Es muss klingen wie er selbst — direkt, analytisch, ohne KI-Geruch."
+            "Es muss klingen wie er selbst, direkt und analytisch, ohne KI-Geruch."
         )
         lang_reminder = ""
+
+    role_block = ROLE_FOCUS_BLOCKS.get(role_focus, ROLE_FOCUS_BLOCKS["ai_engineer"])
+    remote_block = REMOTE_PREF_BLOCKS.get(remote_pref, "")
+    salary_block_text = _salary_block(salary)
+    location_block_text = _location_pref_block(location_pref)
+
+    optional_blocks = []
+    if remote_block:
+        optional_blocks.append(remote_block.strip())
+    if salary_block_text:
+        optional_blocks.append(salary_block_text.strip())
+    if location_block_text:
+        optional_blocks.append(location_block_text.strip())
+    optional_section = ""
+    if optional_blocks:
+        optional_section = (
+            "\n═══ STELLEN-SPEZIFISCHE WÜNSCHE (von Pavlos eingegeben) ═══\n\n"
+            + "\n\n".join(optional_blocks)
+            + "\n"
+        )
+
+    cv_text = load_cv_text()
+    if cv_text:
+        cv_block = (
+            "═══ LEBENSLAUF (PRIMÄRE FAKTENQUELLE) ═══\n"
+            "Alles was du an konkreten Projekten, Stack-Elementen, Ausbildungs- "
+            "oder Zertifikatsangaben nennst, MUSS aus diesem CV-Text kommen. "
+            "Erfinde nichts darüber hinaus. Wenn die Stelle nach etwas fragt "
+            "das hier nicht steht, dann steht es Pavlos nicht zur Verfügung "
+            "und gehört nicht in den Brief.\n\n"
+            f"{cv_text}"
+        )
+    else:
+        cv_block = (
+            "═══ LEBENSLAUF ═══\n"
+            "(CV-Datei nicht lesbar. Halte dich strikt an das Präferenz-Profil "
+            "unten und erfinde keine Projekte oder Stack-Details.)"
+        )
 
     return f"""{opening}
 
 
-KANDIDATEN-PROFIL:
-{PROFILE}
+═══ KANDIDATEN-KONTEXT (Präferenzen, nicht im CV) ═══
+{PROFILE_PREFERENCES}
 
-REFERENZ-ANSCHREIBEN (Stil treffen, NICHT Inhalt kopieren — nur zeigen wie er schreibt):
-{REFERENCE_LETTER}
+{cv_block}
 
-═══ ABSOLUTE STIL-REGELN (jede Verletzung ruiniert das Anschreiben) ═══
+═══ FAKTENTREUE ═══
+{FAKTENTREUE}
 
-S1. KEINE Gedankenstriche oder Halbgeviertstriche (— oder –). Komma, Punkt oder Klammern stattdessen.
+═══ MOTIVATION ═══
+{MOTIVATION}
 
-S2. KEINE Doppelpunkte zur Aufzählung ("Mein Stack: Python" → "Zu meinem Stack gehören Python").
+═══ ROLLEN-FOKUS (Pavlos' aktuelle Bewerbungs-Richtung) ═══
+{role_block}
+{optional_section}
+═══ TONALITÄT ═══
+{TONALITAET}
 
-S3. KEINE Semikolons.
+═══ MIKRO-STIL-BEISPIELE ═══
+{VOICE_SAMPLES}
 
-S4. KEINE Bullet Points. Alles Fließtext.
+**═══ HOOK-REGEL ═══**
 
-S5. KEINE Superlative, Enthusiasmus-Signale oder Marketing-Sprache: "leidenschaftlich", "begeistert mich zutiefst", "spannend", "innovativ", "zukunftsweisend". Nüchtern und sachlich.
+Die GUT-Beispiele oben zeigen nur den Stil, nie den Inhalt. Übernimm niemals eine dieser Formulierungen direkt oder leicht abgewandelt als ersten Satz.
 
-S6. KEINE Floskeln: "Know-how einbringen", "nächste Generation mitgestalten", "robuste Lösungen", "agiles Umfeld". Konkrete Beschreibung statt leere Versprechen.
+Der Hook muss aus dem spezifischen Match zwischen Pavlos' Profil und dieser konkreten Stelle entstehen. Finde den interessantesten Andockpunkt, also den Punkt wo sein Hintergrund und die Stelle am unerwartesten oder präzisesten zusammentreffen. Das kann ein Projekt sein, eine Technologie, eine Verantwortungsrolle, eine Domäne oder eine Art zu arbeiten. Nicht der offensichtlichste Punkt, sondern der ehrlichste und konkreteste.
 
-S7. KEINE Wiederholungen. Jeder Satz bringt neue Information.
+Jeder Brief hat einen anderen ersten Satz. Wenn der Hook für zwei verschiedene Stellen identisch klingen könnte, ist er falsch.
 
-S8. KEINE Sternchen-Gendern. Neutrale Begriffe oder ausgeschriebene Doppelform.
+═══ INHALT ═══
 
-S9. ZAHLEN GENAU: über 2,5 Jahre Erfahrung, über 500 Redakteure, über 250 Portale. Zahlen zur Wahlautomatisierung nur aus dem Profil übernehmen, nicht erfinden.
+Der Brief beantwortet zwei Fragen aus Pavlos' Sicht und in seinem Stil.
+Erstens, warum genau diese Stelle. Zweitens, warum er konkret dafür passt.
 
-S10. ANREDE: {anrede_form}
+Lies die Stellenbeschreibung sorgfältig und finde den ehrlichsten Andockpunkt.
+Das kann der Stack sein, die Art der Aufgabe, die Domäne, der Ownership-Grad,
+die Phase des Produkts oder etwas anderes. Es gibt kein vorgegebenes Raster.
+Was du NICHT machen darfst, ist die Stellenbeschreibung paraphrasieren oder
+loben. Du darfst nur eine Aussage über Pavlos formulieren, die zufällig zu
+dieser Stelle passt.
 
-S11. ANTI-AUFZÄHLUNG: Kein Satz darf mehr als 4 Stack-Komponenten aufzählen. Stack-Aufzählungen brechen den Lesefluss. Lieber 2-3 Schlüsselelemente nennen die zur Stelle passen, statt alles. Ein Satz wie "Python, FastAPI, LangChain, LangGraph, LiteLLM, Milvus, AWS, Kubernetes" ist verboten.
+Konkrete Belege kommen aus dem CV oben. Wähle die Projekte und Stack-Elemente,
+die zur Stelle passen, statt einer Aufzählung von allem. Maximal zwei Projekte
+nennen, eines ist meistens besser. Bei jedem Projekt einen konkreten Anker
+(Volumen, Verantwortungs-Rolle, Tech-Eigenheit), keine generische Beschreibung.
 
-═══ GLOBAL VERBOTEN (in JEDEM Absatz, nicht nur einem) ═══
+Wenn Pavlos die Anforderungen der Stelle stark abdeckt (Stack-Overlap deutlich,
+Kernaufgabe identisch zu seinem Tagesgeschäft, Ownership-Profil passt), darf
+das im Brief sichtbar werden. Nicht durch Selbstbewertung ("ich bin der perfekte
+Kandidat"), sondern durch eine sachliche Beobachtung mit Beleg ("der Stack
+deckt sich mit dem was ich bei Ippen Digital täglich nutze, also Python mit
+FastAPI und LangChain in Produktion"). Wenn der Match nicht stark ist, lass es.
 
-- "Asynchrone Zusammenarbeit / Zeitzonen / verteilte Teams / globale Stakeholder" — nicht zutreffend, auch nicht als Negation einbauen ("auch wenn ich keine Zeitzonen-Erfahrung habe...").
-- "Domäne X ist neu für mich, aber..." — Disclaimer über fehlendes Domänenwissen nur dann einbauen, wenn die Stelle das EXPLIZIT verlangt. Sonst weglassen.
-- "Dass Sie/ihr remote arbeitet, passt mir ebenfalls" — Standort-/Remote-Kommentare nur wenn explizit gefragt. Bewerbung impliziert das.
-- "Eure Mission begeistert mich" / "Spannendes Produkt" / "Beeindruckende Technologie" — wertende PR-Sprache.
-- "Ich halte für hart" / "Das ist eine andere Qualität von" — bewertende, herablassend wirkende Formulierungen.
+Länge insgesamt 200-280 Wörter. Vier bis fünf kurze Absätze, optisch atmend.
+Keine fixen Vorgaben für Inhalt je Absatz, aber jeder Absatz braucht eine
+eigene Funktion. Doppelte Aussagen oder Wiederholungen streichen.
 
-═══ INHALT UND STRUKTUR (5 ABSÄTZE) ═══
+═══ STIL-REGELN (kompromisslos) ═══
 
-Insgesamt 200-260 Wörter. Fünf Absätze mit klar getrennter Funktion. Visuell soll der
-Brief atmen, nicht in drei Wänden ankommen.
+S1. KEINE GEDANKENSTRICHE. Verboten sind die Zeichen — und – als Satzzeichen.
+    Auch nicht als Klammer-Ersatz, auch nicht zur Betonung, auch nicht zwischen
+    Satzteilen. Ein einziger Gedankenstrich im Brief ist ein Totalausfall.
+    Erlaubt bleibt nur der Bindestrich (-) in zusammengesetzten Wörtern wie
+    AI-Engineer, Multi-Agent oder Quality-Gates.
 
-── ABSATZ 1: HOOK (1-2 SÄTZE, HARTE OBERGRENZE) ──
+    Falsch  "Mein Stack ist Python, FastAPI, LangChain — alles produktiv."
+    Richtig "Mein Stack ist Python, FastAPI und LangChain. Alles produktiv."
 
-MAXIMAL 2 SÄTZE. Nicht 3. Wenn unklar: 1 Satz.
+S2. KEINE DOPPELPUNKTE im Brief-Body. Keine Aufzählungs-Doppelpunkte, keine
+    Einleitungs-Doppelpunkte, keine "Mein Stack:"-Konstruktionen. Doppelpunkte
+    gehören in Spec-Dokumente, nicht in Anschreiben. Einzige Ausnahme im
+    gesamten Output ist die BETREFF-Zeile, weil das ein technisches Prefix ist.
 
-Funktion: Lies das Posting wie ein Mensch und finde EINE Stelle, die ehrlich anzieht.
-Reagiere darauf in Pavlos' Stimme, kurz und persönlich. Dies ist KEINE Firmen-Analyse
-und KEIN Beweis dass du verstanden hast, womit die Firma Geld verdient. Es ist eine
-ehrliche Reaktion auf das was im Posting steht.
+    Falsch  "Mein Stack: Python, FastAPI, LangChain."
+    Richtig "Zu meinem Stack gehören Python, FastAPI und LangChain."
 
-Andockpunkte (in dieser Reihenfolge bevorzugen):
-1. Ein Mission/Werte-Satz im Posting der wirklich resoniert (Sinn, Menschen, Bildung,
-   Gesundheit, Zugang). Nur nehmen wenn er da steht und ehrlich passt, nicht erfinden.
-2. Eine Rollen-Eigenschaft die Pavlos sucht und die explizit dasteht (Ownership,
-   hands-on, Schnittmenge Engineering+Produkt, Wachstum, technische Tiefe).
-3. Ein konkretes Tech-Setup oder Problem-Profil das gut zu seinem Hintergrund passt
-   (LLM im Produkt-Kern statt Add-on, Pipelines mit harten Qualitäts-Anforderungen).
-4. Erst wenn 1-3 nichts hergeben: eine sachliche Beobachtung über Domäne/Produkt,
-   ohne zu werten.
+S3. KEINE SEMIKOLONS. Nirgendwo. Punkt oder Komma stattdessen.
 
-Ton: persönlich-reaktiv, nicht analytisch-distanziert. Sätze die mit "Auf die Stelle
-bin ich gestoßen, weil...", "Im Stellentext ist mir hängen geblieben..." oder "Was mich
-an der Rolle zieht..." beginnen, sind oft besser als "Bei [Firma] sitzt...".
+S4. KEINE Bullet Points. Reiner Fließtext.
 
-Nach dem Andockpunkt: optional ein kurzer zweiter Satz der zeigt, warum Pavlos zu genau
-diesem Punkt passt. KONKRET, nicht allgemein. Beispiele: "über 2,5 Jahre LLM-Pipelines
-im Produktionsbetrieb, nicht als PoC", "ich habe genau das bei X gebaut", "das ist mein
-Alltagskontext seit über 2,5 Jahren". Nur einbauen wenn es sich natürlich fügt.
-VERBOTEN: "Ich bin der ideale Kandidat", "Meine Erfahrung macht mich perfekt für..."
+S5. KEINE Superlative, Enthusiasmus-Signale oder Marketing-Sprache.
+    Wörter wie "leidenschaftlich", "begeistert mich zutiefst", "spannend",
+    "innovativ", "zukunftsweisend" sind verboten. Nüchtern und sachlich.
 
-KEINE feste Schablone vorgeben, jeder Hook ist neu und auf das konkrete Posting
-zugeschnitten.
+S6. KEINE Floskeln. "Know-how einbringen", "nächste Generation mitgestalten",
+    "robuste Lösungen", "agiles Umfeld" und ähnliches haben im Brief nichts
+    verloren.
 
-BAD-Beispiele (so NICHT):
-- "Remote People baut Infrastruktur für globale Teams, bei der Compliance und
-  Payroll-Automatisierung im Kern sitzen."
-  (Backwards-Analyse, klingt nach Wikipedia-Eintrag, nicht nach jemandem der sich
-  bewirbt)
-- "Eure Mission, Compliance neu zu denken, begeistert mich."
-  (PR-Floskel)
-- "Was ihr bei X macht, halte ich für ein hartes Problem."
-  (bewertend, anmaßend)
-- "Bei Bluefish AI geht es um LLM-Anwendungen, eine andere Qualität von
-  Produktionsdruck als..."
-  (akademisch, herablassend)
+S7. KEINE Selbstbewertung. "Ich bin der perfekte Kandidat", "100% Match",
+    "ideale Besetzung" sind verboten. Stattdessen Beobachtungen mit Beleg.
 
-── ABSATZ 2: POSITION (2-3 SÄTZE) ──
+S8. KEINE Stack-Aufzählungen mit mehr als vier Komponenten in einem Satz.
+    Lieber zwei oder drei passende Elemente nennen als alles.
 
-Wer Pavlos ist, wo er arbeitet, mit welchem Stack. Ippen Digital mit konkreten Zahlen
-(über 2,5 Jahre, über 250 Portale). Stack-Elemente die zur Stelle passen — MAXIMAL
-4 Komponenten in einem Satz (S11). Kein Projekt-Name in diesem Absatz, nur Rolle und
-Stack.
+S9. KEINE Wiederholungen. Jeder Satz bringt neue Information.
 
-── ABSATZ 3: KONKRETES BEISPIEL (2-3 SÄTZE) ──
+S10. KEINE Sternchen-Gendern. Neutrale Begriffe oder ausgeschriebene Doppelform.
 
-EIN konkretes Projekt, das thematisch zur Stelle passt. Auswahl-Logik steht im Profil
-unter "NUR WENN ...". Maximal 2 Projekte erlaubt, aber 1 ist meistens besser. Mit
-konkreten Zahlen oder einer technischen Eigenheit, die die Komplexität greifbar macht.
-NICHT alle Projekte aufzählen.
+S11. ANREDE-FORM. {anrede_form} Innerhalb des Briefs muss die gewählte Form
+    konsistent durchgehalten werden, kein Mix aus Du und Sie.
 
-── ABSATZ 4: MATCH (2-3 SÄTZE) ──
-
-Was Pavlos konkret mitbringt das zur Stelle passt. Kernpunkt: Python ist tägliche
-Arbeitssprache, AI-Tools (Cursor, Claude Code) ergänzen den Workflow. Kurz und ohne
-Selbstvermarktungs-Vokabular. Formulierungs-Basis (NICHT wörtlich, aber Richtung und
-Länge treffen — 2 Sätze reichen meistens):
-
-"Python ist meine tägliche Arbeitssprache. Mit neueren AI-Tools wie Cursor und Claude
-Code arbeite ich gerne und sehe darin einen deutlichen Effizienzgewinn, gerade in
-Kombination mit eigener Architekturarbeit."
-
-VERBOTEN hier: "verstehe das Fundament darunter", "messbarer Effizienzgewinn",
-"echtes Architekturverständnis", "nicht aus Hype" — alles wertend und arrogant.
-
-Wenn ein Domänen-Gap explizit aus der Stelle kommt: kurz und konstruktiv ansprechen.
-Sonst weglassen.
-
-── ABSATZ 5: ABSCHLUSS (1-2 SÄTZE) ──
-
-Eigener kurzer Absatz, nicht angehängt an Absatz 4. Verfügbarkeit kurz, dann
-Kennenlern-Satz. Beispiele:
-
-Deutsch: "Ich bin kurzfristig verfügbar. Über ein Kennenlernen würde ich mich freuen."
-Englisch: "I'm available to start on short notice. I'd love to connect."
-
-VERBOTEN: "Ein Wechsel" (mehrdeutig), "A move" (klingt nach Umzug).
-Nicht ausschmücken.
+S12. KEINE Standort-, Remote- oder Zeitzonen-Kommentare wenn die Stelle das
+    nicht explizit verlangt. Eine Bewerbung impliziert das.
 
 ═══ OUTPUT-FORMAT ═══
 
-Erste Zeile: BETREFF: <Betreff>
-Dann Leerzeile.
-Dann der vollständige Brief-Text in dieser Reihenfolge:
+SPRACHE-KONSISTENZ. Anrede, Body und Grußformel müssen in derselben Sprache
+sein. Body deutsch heißt Anrede deutsch und Grußformel deutsch. Body englisch
+heißt Anrede englisch und Grußformel englisch. Der Firmenname ändert daran
+nichts. Eine Firma mit englischem Namen (Bluefish AI, Anthropic) bekommt
+trotzdem eine deutsche Anrede, wenn der Brief auf Deutsch ist.
 
-1. ANREDE — genau eine Zeile, dann Leerzeile. Wähle passend zu Ton und Sprache:
-   - Formelles Deutsch: "Sehr geehrte Damen und Herren,"
-   - Startup/Du-Ton: "Hallo zusammen,"
-   - Formelles Englisch: "Dear Hiring Team," oder "Dear [Company Name] Team,"
-   - Casual Englisch: "Hi there," oder "Hi [Company] team,"
-   Nicht immer "Hallo zusammen," — wenn die Firma konservativ oder groß wirkt, lieber formell.
+Reihenfolge der Ausgabe.
 
-2. BODY-ABSÄTZE — durch doppelten Zeilenumbruch getrennt. KEIN Name am Ende.
+Zeile 1   BETREFF: <Betreff>
+Leerzeile
+Anrede    Eine Zeile, danach Leerzeile.
 
-3. GRUSSFORMEL — als letzter Absatz, NUR die Formel, KEIN "Pavlos Musenidis". Passend wählen:
-   - Formelles Deutsch: "Mit freundlichen Grüßen"
-   - Casual Deutsch: "Viele Grüße"
-   - Formelles Englisch: "Best regards,"
-   - Casual Englisch: "Kind regards,"
+   Wenn Body deutsch ist, wähle eine deutsche Variante.
+   Formell (große oder konservative Firma)  "Sehr geehrte Damen und Herren,"
+   Locker  (Startup oder Du-Ton in der Stelle)  "Hallo zusammen,"
 
-KEINE Unterschrift (Pavlos Musenidis kommt aus dem Template).
+   Wenn Body englisch ist, wähle eine englische Variante.
+   Formell "Dear Hiring Team," oder "Dear [Company] Team,"
+   Locker  "Hi there," oder "Hi [Company] team,"
+
+Body      Mehrere Absätze, durch doppelten Zeilenumbruch getrennt. Kein Name.
+
+Grußformel Letzter Absatz, nur die Formel, kein "Pavlos Musenidis".
+
+   Wenn Body deutsch ist  "Mit freundlichen Grüßen" oder "Viele Grüße"
+   Wenn Body englisch ist "Best regards," oder "Kind regards,"
+
+═══ LETZTE PRÜFUNG VOR DEM ABSENDEN ═══
+
+Vor der Ausgabe drei Dinge selbst prüfen.
+
+1. Sprach-Konsistenz. Anrede, Body, Grußformel in derselben Sprache. Sonst
+   neu schreiben. Der Firmenname spielt keine Rolle.
+
+2. Verbotene Zeichen im Body.
+     Gedankenstrich  —  oder  –   ersetzen durch Komma oder Punkt
+     Doppelpunkt     :              ersetzen (außer BETREFF-Zeile)
+     Semikolon       ;              ersetzen durch Komma oder Punkt
+
+3. Faktentreue. Jedes konkrete Detail (Projekt, Zahl, Stack, Zertifikat)
+   stammt entweder aus dem CV-Block oder aus dem Präferenz-Block. Keine
+   Erfindungen. Wenn unsicher, weglassen.
 {lang_reminder}"""
 
 
 # ---------------------------------------------------------------------------
 # Anthropic API call
 # ---------------------------------------------------------------------------
-
-_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?:\s+|$)")
-
-
-def _count_sentences(text: str) -> int:
-    """Counts sentences ending in . ! ? — abbreviations are rare in cover letters."""
-    stripped = text.strip()
-    if not stripped:
-        return 0
-    parts = [p for p in _SENTENCE_SPLIT_RE.split(stripped) if p.strip()]
-    return len(parts)
-
 
 def _parse_response(text: str, fallback_title: str) -> tuple[str, str]:
     """Splits raw LLM output into (subject, body)."""
@@ -463,23 +691,9 @@ def _parse_response(text: str, fallback_title: str) -> tuple[str, str]:
     return subject, body
 
 
-def _first_paragraph(body: str) -> str:
-    for para in body.split("\n\n"):
-        para = para.strip()
-        if para:
-            return para
-    return ""
-
-
 def call_anthropic(system_prompt: str, job: dict, api_key: str,
                    model: str = "claude-sonnet-4-5-20250929") -> tuple[str, str] | None:
-    """Returns (subject, body_text) on success.
-
-    Performs a hard validation of the 2-sentence hook rule on paragraph 1.
-    If the first attempt produces > 2 sentences in paragraph 1, retries once
-    with an appended hint. After that, the result is returned regardless so
-    the user can edit manually.
-    """
+    """Returns (subject, body_text) on success."""
     try:
         from anthropic import Anthropic
     except ImportError:
@@ -488,58 +702,92 @@ def call_anthropic(system_prompt: str, job: dict, api_key: str,
 
     client = Anthropic(api_key=api_key)
 
-    base_user_msg = f"""STELLE:
+    user_msg = f"""STELLE
 
-Titel: {job['title']}
-Unternehmen: {job['company']}
-Standort: {job['location']}
+Titel        {job['title']}
+Unternehmen  {job['company']}
+Standort     {job['location']}
 
-Stellenbeschreibung:
+Stellenbeschreibung
 {job['description'][:4000]}
 
 Schreibe das Anschreiben jetzt."""
 
-    def _generate(user_msg: str) -> tuple[str, str] | None:
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=1500,
-                temperature=0.7,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            text = response.content[0].text
-        except Exception as e:
-            log.error("Anthropic API failed: %s", e)
-            return None
-        return _parse_response(text, job["title"])
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=1500,
+            temperature=0.7,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        text = response.content[0].text
+    except Exception as exc:  # noqa: BLE001
+        log.error("Anthropic API failed: %s", exc)
+        return None
+    return _parse_response(text, job["title"])
 
-    result = _generate(base_user_msg)
-    if not result:
+
+def call_anthropic_refine(
+    system_prompt: str,
+    subject: str,
+    body: str,
+    instruction: str,
+    api_key: str,
+    job: dict | None = None,
+    model: str = "claude-sonnet-4-5-20250929",
+) -> tuple[str, str] | None:
+    """Refine an existing letter using the SAME system prompt.
+
+    The shared system prompt keeps the style rules, fact rules and language
+    consistency rules active during refinement, so the model cannot quietly
+    reintroduce em-dashes or change language.
+    """
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        log.error("anthropic package missing")
         return None
 
-    subject, body = result
-    hook_sentences = _count_sentences(_first_paragraph(body))
-    if hook_sentences > 2:
-        log.warning(
-            "Hook hat %d Saetze (>2). Retry mit Hinweis.", hook_sentences
+    job_block = ""
+    if job:
+        job_block = (
+            "ZUGEHÖRIGE STELLE (Faktentreue gilt weiter)\n\n"
+            f"Titel        {job.get('title', '')}\n"
+            f"Unternehmen  {job.get('company', '')}\n"
+            f"Standort     {job.get('location', '')}\n\n"
+            f"Stellenbeschreibung\n{(job.get('description') or '')[:4000]}\n\n"
         )
-        retry_msg = (
-            base_user_msg
-            + "\n\nWICHTIG: Vorheriger Versuch hatte zu viele Saetze in Absatz 1. "
-            "Absatz 1 darf MAXIMAL 2 Saetze enthalten. Kuerze entsprechend."
-        )
-        retry = _generate(retry_msg)
-        if retry:
-            subject, body = retry
-            retry_sentences = _count_sentences(_first_paragraph(body))
-            if retry_sentences > 2:
-                log.warning(
-                    "Retry-Hook hat immer noch %d Saetze. Gebe trotzdem zurueck.",
-                    retry_sentences,
-                )
 
-    return subject, body
+    user_msg = (
+        "Du überarbeitest ein bestehendes Anschreiben gemäß einer Anweisung. "
+        "Alle Stil-, Sprach- und Faktentreue-Regeln aus dem System-Prompt "
+        "gelten weiter. Insbesondere keine Gedankenstriche, keine Doppelpunkte "
+        "im Body, keine Semikolons, gleiche Sprache in Anrede, Body und "
+        "Grußformel.\n\n"
+        f"{job_block}"
+        f"BESTEHENDES ANSCHREIBEN\n\nBETREFF: {subject}\n\n{body}\n\n"
+        f"ANWEISUNG\n{instruction}\n\n"
+        "Gib das vollständige überarbeitete Anschreiben im üblichen Format "
+        "zurück (BETREFF-Zeile, Anrede, Body-Absätze, Grußformel). KEINE "
+        "Meta-Kommentare wie 'Hier ist die überarbeitete Version'."
+    )
+
+    try:
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=1500,
+            temperature=0.6,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        text = response.content[0].text
+    except Exception as exc:  # noqa: BLE001
+        log.error("Anthropic refine failed: %s", exc)
+        return None
+
+    return _parse_response(text, subject or "Bewerbung")
 
 
 # ---------------------------------------------------------------------------
@@ -646,12 +894,11 @@ async def main_async(args):
     print(f"  Standort:    {job['location']}")
     print(f"  Länge:       {len(job['description'])} Zeichen")
 
-    form = args.form or "du"
     lang = args.lang or "de"
-    print(f"  Anrede-Form: {form.upper()}, Sprache: {lang.upper()}")
+    print(f"  Sprache: {lang.upper()} (Du/Sie entscheidet das LLM aus dem Posting)")
 
     print(f"\n→ Generiere Anschreiben mit {args.model}...")
-    system_prompt = build_system_prompt(form, lang)
+    system_prompt = build_system_prompt(lang=lang)
     result = call_anthropic(system_prompt, job, api_key, args.model)
     if not result:
         print("✗ LLM-Aufruf fehlgeschlagen", file=sys.stderr)
@@ -704,8 +951,6 @@ def main():
     p = argparse.ArgumentParser(description="Anschreiben-Generator für eine Job-URL")
     p.add_argument("url", help="Job-URL aus dem Report (Greenhouse, Lever, Personio, Ashby)")
     p.add_argument("--out", default=None, help="Output-Verzeichnis (default: ./cover_letters)")
-    p.add_argument("--form", choices=["du", "sie"], default=None,
-                   help="Du oder Sie (default: du)")
     p.add_argument("--lang", choices=["de", "en"], default=None,
                    help="Briefsprache: de oder en (default: de)")
     p.add_argument("--model", default="claude-sonnet-4-5-20250929",
